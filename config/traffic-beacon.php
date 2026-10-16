@@ -3,11 +3,13 @@
 return [
 
     /*
-    | Beacons are only recorded when an endpoint and token are configured.
-    | Issue a token on the dashboard with `php artisan traffic:token {site}`.
+    | Turn the beacon on or off for this site without uninstalling it:
+    | TRAFFIC_BEACON_ENABLED=true|false (also accepts on/off, yes/no, 1/0).
+    | Beacons are only recorded when an endpoint and token are configured too.
+    | Issue a token on the dashboard under Manage → Sites.
     */
 
-    'enabled' => env('TRAFFIC_BEACON_ENABLED', true),
+    'enabled' => filter_var(env('TRAFFIC_BEACON_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
 
     'endpoint' => env('TRAFFIC_BEACON_ENDPOINT'),
 

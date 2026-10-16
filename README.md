@@ -24,11 +24,18 @@ Requires PHP 8.3+ and Laravel 12 or 13.
 3. Add to the site's `.env` and deploy:
 
    ```dotenv
+   TRAFFIC_BEACON_ENABLED=true
    TRAFFIC_BEACON_ENDPOINT=https://deployment.bitpixel.app/ingest
    TRAFFIC_BEACON_TOKEN=bpx_…
    ```
 
 4. Keep the site's scheduler running (`php artisan schedule:run` every minute). It sends the last few beacons when traffic goes quiet.
+
+## Turning it on or off
+
+Set `TRAFFIC_BEACON_ENABLED=false` in the site's `.env` to stop reporting, and `true` to start again. It also accepts `on`/`off`, `yes`/`no` and `1`/`0`. When off, the middleware isn't registered at all, so the beacon adds no work to requests.
+
+The change takes effect on the next request. If the site caches its config (`php artisan config:cache`, which Forge runs on deploy), re-run that command or redeploy.
 
 ## Where beacons wait (Redis is optional)
 
@@ -71,7 +78,7 @@ php artisan vendor:publish --tag=traffic-beacon-config
 | --- | --- | --- |
 | `TRAFFIC_BEACON_ENDPOINT` | — | The dashboard's `/ingest` URL. Required. |
 | `TRAFFIC_BEACON_TOKEN` | — | The site's ingest token. Required. |
-| `TRAFFIC_BEACON_ENABLED` | `true` | Turn the beacon off without uninstalling it. |
+| `TRAFFIC_BEACON_ENABLED` | `true` | Turn the beacon on or off without uninstalling it. |
 | `TRAFFIC_BEACON_FLUSH_INTERVAL` | `5` | Seconds between sends. |
 | `TRAFFIC_BEACON_SAMPLE_RATE` | `1.0` | Fraction of requests to record. |
 | `TRAFFIC_BEACON_IGNORE_BOTS` | `true` | Skip bots and requests without a user agent. |
@@ -82,6 +89,9 @@ php artisan vendor:publish --tag=traffic-beacon-config
 The beacon also works under Laravel Octane: request duration is measured per request, not from when the worker started.
 
 ## Changelog
+
+### v0.1.2
+- **`TRAFFIC_BEACON_ENABLED` accepts more values:** `on`/`off`, `yes`/`no` and `1`/`0`, not just `true`/`false`. Anything unrecognised turns it off.
 
 ### v0.1.1
 - **Without Redis**, beacons now go to an append-only spool file instead of a locked array in the cache, so sites without Redis can handle real traffic.
