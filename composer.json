@@ -1,0 +1,26 @@
+{
+    "name": "bitpixel/traffic-beacon",
+    "description": "Reports anonymised request beacons from a Laravel site to the BitPixel deployment dashboard.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.3",
+        "illuminate/cache": "^12.0|^13.0",
+        "illuminate/console": "^12.0|^13.0",
+        "illuminate/http": "^12.0|^13.0",
+        "illuminate/support": "^12.0|^13.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Bitpixel\\TrafficBeacon\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Bitpixel\\TrafficBeacon\\TrafficBeaconServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable"
+}
