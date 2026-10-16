@@ -34,7 +34,9 @@ return [
     'sample_rate' => (float) env('TRAFFIC_BEACON_SAMPLE_RATE', 1.0),
 
     /*
-    | Request paths that are never reported.
+    | Request paths that are never reported: health checks, dev tools and
+    | background requests that aren't page views (Livewire updates, Flux and
+    | Livewire assets, broadcasting auth, Sanctum's CSRF cookie).
     */
 
     'except' => [
@@ -43,15 +45,38 @@ return [
         'horizon/*',
         'pulse*',
         'telescope/*',
+        'livewire/*',
+        'livewire-*',
+        'flux/*',
+        'broadcasting/*',
+        'sanctum/csrf-cookie',
     ],
 
     /*
-    | Cache store used for the shared buffer. Use a store shared by every
-    | web worker, not "array". Redis (6.2+) is strongly recommended: the
-    | buffer is then a Redis list, so recording a request is O(1). Other
-    | stores keep a locked array in the cache, which suits low-traffic sites.
+    | Skip crawlers, link previewers, uptime monitors and HTTP libraries
+    | (matched by user agent), and requests with no user agent at all.
+    */
+
+    'ignore_bots' => (bool) env('TRAFFIC_BEACON_IGNORE_BOTS', true),
+
+    /*
+    | Header holding the real visitor IP when the site sits behind a proxy
+    | that Laravel doesn't trust, e.g. "CF-Connecting-IP" behind Cloudflare.
+    | Leave empty to use $request->ip(). Only set it when every request comes
+    | through that proxy: otherwise visitors can forge the header.
+    */
+
+    'ip_header' => env('TRAFFIC_BEACON_IP_HEADER'),
+
+    /*
+    | Where beacons wait between flushes. When this cache store is Redis
+    | (6.2+), the buffer is a Redis list. Otherwise beacons are appended to a
+    | spool file in `spool_path` on the local disk. Both cost O(1) per request,
+    | so Redis is optional.
     */
 
     'cache_store' => env('TRAFFIC_BEACON_CACHE_STORE'),
+
+    'spool_path' => env('TRAFFIC_BEACON_SPOOL_PATH', storage_path('framework/cache/traffic-beacon')),
 
 ];

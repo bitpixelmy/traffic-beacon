@@ -3,7 +3,6 @@
 namespace Bitpixel\TrafficBeacon;
 
 use Illuminate\Cache\RedisStore;
-use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\Cache;
@@ -15,10 +14,12 @@ use Throwable;
  * A buffer shared by every worker, flushed to the dashboard's POST /ingest
  * endpoint at most once per configured interval.
  *
- * On a Redis cache store the buffer is a Redis list, so recording a beacon is a
- * single atomic RPUSH + LTRIM no matter how full the buffer is. On any other
- * store it falls back to a locked array in the cache, which is fine for low
- * traffic sites.
+ * - On a Redis cache store the buffer is a Redis list, so recording a beacon is
+ *   a single atomic RPUSH + LTRIM no matter how full the buffer is.
+ * - On any other store it is an append-only spool file on the local disk: each
+ *   request appends one line under a file lock, and a flush atomically renames
+ *   the file away before reading it. Both are O(1) per request, so sites
+ *   without Redis can run the beacon under real traffic too.
  *
  * Nothing here ever throws: the beacon must never be able to break the site.
  *
@@ -28,11 +29,19 @@ class BeaconBuffer
 {
     private const string KEY = 'traffic-beacon:buffer';
 
-    private const string LOCK = 'traffic-beacon:lock';
-
     private const string FLUSHED_KEY = 'traffic-beacon:flushed';
 
     private const int TTL_SECONDS = 300;
+
+    private const string SPOOL_FILE = 'buffer.jsonl';
+
+    private const string FLUSHED_MARKER = 'flushed';
+
+    /**
+     * Upper bound on the spool file per buffered beacon, so a dashboard outage
+     * can't fill the disk. A beacon is ~150-300 bytes as JSON.
+     */
+    private const int SPOOL_BYTES_PER_BEACON = 1024;
 
     /**
      * @param  array<string, mixed>  $config
@@ -45,23 +54,25 @@ class BeaconBuffer
     public function push(array $beacon): void
     {
         $this->safely(function () use ($beacon): void {
-            $maxBuffer = max(1, (int) $this->config['max_buffer']);
+            $json = json_encode($beacon, JSON_THROW_ON_ERROR);
 
             if ($redis = $this->redis()) {
                 $key = $this->redisKey();
-                $redis->command('rpush', [$key, json_encode($beacon, JSON_THROW_ON_ERROR)]);
-                $redis->command('ltrim', [$key, -$maxBuffer, -1]);
+                $redis->command('rpush', [$key, $json]);
+                $redis->command('ltrim', [$key, -$this->maxBuffer(), -1]);
                 $redis->command('expire', [$key, self::TTL_SECONDS]);
 
                 return;
             }
 
-            $this->withLock(function () use ($beacon, $maxBuffer): void {
-                $buffer = $this->cachedBuffer();
-                $buffer[] = $beacon;
+            $file = $this->spoolFile();
+            clearstatcache(true, $file);
 
-                $this->store()->put(self::KEY, array_slice($buffer, -$maxBuffer), self::TTL_SECONDS);
-            });
+            if (is_file($file) && filesize($file) >= $this->maxBuffer() * self::SPOOL_BYTES_PER_BEACON) {
+                return;
+            }
+
+            file_put_contents($file, $json."\n", FILE_APPEND | LOCK_EX);
         });
     }
 
@@ -71,7 +82,22 @@ class BeaconBuffer
     public function flushIfDue(): void
     {
         $this->safely(function (): void {
-            if ($this->store()->add(self::FLUSHED_KEY, true, max(1, (int) $this->config['flush_interval']))) {
+            $interval = max(1, (int) $this->config['flush_interval']);
+
+            if ($this->redis()) {
+                if ($this->store()->add(self::FLUSHED_KEY, true, $interval)) {
+                    $this->flush();
+                }
+
+                return;
+            }
+
+            // The spool lives on this server's disk, so the "last flushed" marker does too.
+            $marker = $this->spoolDirectory().'/'.self::FLUSHED_MARKER;
+            clearstatcache(true, $marker);
+
+            if (! is_file($marker) || time() - (int) filemtime($marker) >= $interval) {
+                touch($marker);
                 $this->flush();
             }
         });
@@ -94,7 +120,7 @@ class BeaconBuffer
     }
 
     /**
-     * Atomically remove and return everything in the buffer.
+     * Atomically remove and return everything in the buffer, newest last.
      *
      * @return list<array<mixed>>
      */
@@ -102,22 +128,69 @@ class BeaconBuffer
     {
         if ($redis = $this->redis()) {
             // LPOP with a count (Redis 6.2+) pops the whole buffer in one atomic step.
-            $popped = $redis->command('lpop', [$this->redisKey(), max(1, (int) $this->config['max_buffer'])]);
+            $popped = $redis->command('lpop', [$this->redisKey(), $this->maxBuffer()]);
 
-            $beacons = array_map(
-                fn (mixed $json): mixed => is_string($json) ? json_decode($json, true) : null,
-                is_array($popped) ? $popped : [],
-            );
-
-            return array_values(array_filter($beacons, 'is_array'));
+            return $this->decode(is_array($popped) ? $popped : []);
         }
 
-        return $this->withLock(function (): array {
-            $buffer = $this->cachedBuffer();
-            $this->store()->forget(self::KEY);
+        return array_slice($this->takeSpool(), -$this->maxBuffer());
+    }
 
-            return $buffer;
-        });
+    /**
+     * Claim the spool file by renaming it (atomic, so concurrent flushes can't both
+     * take it), wait for any append still holding its lock, then read and delete it.
+     * Claimed files abandoned by a crashed flush for over a minute are picked up too.
+     *
+     * @return list<array<mixed>>
+     */
+    private function takeSpool(): array
+    {
+        $directory = $this->spoolDirectory();
+        $claimed = $directory.'/flushing-'.time().'-'.bin2hex(random_bytes(6)).'.jsonl';
+
+        $files = @rename($directory.'/'.self::SPOOL_FILE, $claimed) ? [$claimed] : [];
+
+        foreach (glob($directory.'/flushing-*.jsonl') ?: [] as $file) {
+            $claimedAt = (int) explode('-', basename($file))[1];
+
+            if ($file !== $claimed && $claimedAt < time() - 60) {
+                $files[] = $file;
+            }
+        }
+
+        $lines = [];
+
+        foreach ($files as $file) {
+            $handle = @fopen($file, 'r');
+
+            if ($handle === false) {
+                continue;
+            }
+
+            flock($handle, LOCK_EX);
+            $contents = stream_get_contents($handle);
+            flock($handle, LOCK_UN);
+            fclose($handle);
+            @unlink($file);
+
+            array_push($lines, ...explode("\n", (string) $contents));
+        }
+
+        return $this->decode($lines);
+    }
+
+    /**
+     * @param  array<mixed>  $lines
+     * @return list<array<mixed>>
+     */
+    private function decode(array $lines): array
+    {
+        $beacons = array_map(
+            fn (mixed $json): mixed => is_string($json) && $json !== '' ? json_decode($json, true) : null,
+            $lines,
+        );
+
+        return array_values(array_filter($beacons, 'is_array'));
     }
 
     /**
@@ -166,29 +239,25 @@ class BeaconBuffer
         }
     }
 
-    /**
-     * @template TResult
-     *
-     * @param  callable(): TResult  $callback
-     * @return TResult
-     */
-    private function withLock(callable $callback): mixed
+    private function maxBuffer(): int
     {
-        $store = $this->store()->getStore();
-
-        return $store instanceof LockProvider
-            ? $store->lock(self::LOCK, 5)->block(2, $callback)
-            : $callback();
+        return max(1, (int) $this->config['max_buffer']);
     }
 
-    /**
-     * @return list<array<mixed>>
-     */
-    private function cachedBuffer(): array
+    private function spoolDirectory(): string
     {
-        $buffer = $this->store()->get(self::KEY, []);
+        $directory = rtrim((string) ($this->config['spool_path'] ?? storage_path('framework/cache/traffic-beacon')), '/');
 
-        return is_array($buffer) ? array_values(array_filter($buffer, 'is_array')) : [];
+        if (! is_dir($directory)) {
+            @mkdir($directory, 0775, true);
+        }
+
+        return $directory;
+    }
+
+    private function spoolFile(): string
+    {
+        return $this->spoolDirectory().'/'.self::SPOOL_FILE;
     }
 
     /**

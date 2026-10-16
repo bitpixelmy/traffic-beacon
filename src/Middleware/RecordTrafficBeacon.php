@@ -19,7 +19,9 @@ use Throwable;
  * visitor location headers are forwarded when the zone has them enabled.
  *
  * Recording runs after the response has been sent and never throws, so the
- * beacon cannot slow down or break the site.
+ * beacon cannot slow down or break the site. Bots, uptime monitors and
+ * background requests (Livewire updates, broadcasting auth) are skipped so the
+ * globe shows people, not machinery.
  */
 class RecordTrafficBeacon
 {
@@ -28,6 +30,13 @@ class RecordTrafficBeacon
      * so one odd request can never get a whole batch rejected.
      */
     private const array METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+
+    /**
+     * User agents of crawlers, link previewers, uptime monitors and HTTP libraries.
+     */
+    private const string BOT_PATTERN = '/bot\b|bot\/|crawl|spider|slurp|mediapartners|bingpreview|facebookexternalhit|embedly|quora link preview|whatsapp|telegram|discord|skypeuripreview|pingdom|uptime|statuscake|site24x7|monitor|headless|lighthouse|pagespeed|gtmetrix|curl\/|wget\/|python-|go-http-client|okhttp|java\/|libwww|httpclient|axios\/|node-fetch|guzzlehttp|postman|insomnia/i';
+
+    private const string STARTED_AT = 'traffic_beacon.started_at';
 
     /**
      * @param  array<string, mixed>  $config
@@ -39,6 +48,8 @@ class RecordTrafficBeacon
 
     public function handle(Request $request, Closure $next): Response
     {
+        $request->attributes->set(self::STARTED_AT, microtime(true));
+
         return $next($request);
     }
 
@@ -57,14 +68,12 @@ class RecordTrafficBeacon
             return;
         }
 
-        $startedAt = defined('LARAVEL_START') ? LARAVEL_START : (float) $request->server('REQUEST_TIME_FLOAT', microtime(true));
-
         $beacon = [
             'method' => $request->getMethod(),
             'status' => $response->getStatusCode(),
             'path' => $this->pathGroup($request),
-            'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
-            'ip' => $request->ip(),
+            'duration_ms' => (int) round((microtime(true) - $this->startedAt($request)) * 1000),
+            'ip' => $this->visitorIp($request),
             'timestamp' => time(),
         ];
 
@@ -86,9 +95,57 @@ class RecordTrafficBeacon
             return false;
         }
 
+        if (($this->config['ignore_bots'] ?? true) && $this->isBot($request)) {
+            return false;
+        }
+
         $sampleRate = (float) $this->config['sample_rate'];
 
         return $sampleRate >= 1 || mt_rand() / mt_getrandmax() < $sampleRate;
+    }
+
+    /**
+     * When the request started. PHP-FPM's REQUEST_TIME_FLOAT includes framework
+     * boot time; under Octane it (and LARAVEL_START) belong to the long-lived
+     * worker, so a value more than a few seconds before this middleware ran is
+     * stale and the middleware's own start time is used instead.
+     */
+    private function startedAt(Request $request): float
+    {
+        $handledAt = $request->attributes->get(self::STARTED_AT);
+        $handledAt = is_float($handledAt) ? $handledAt : microtime(true);
+        $requestTime = (float) $request->server('REQUEST_TIME_FLOAT', 0);
+
+        return $requestTime > 0 && $requestTime <= $handledAt && $handledAt - $requestTime < 5 ? $requestTime : $handledAt;
+    }
+
+    /**
+     * The visitor's IP. By default this is Laravel's `$request->ip()`, which is only
+     * the real visitor when the site trusts its proxies (TrustProxies). Sites behind
+     * Cloudflare or a load balancer can instead name the header the proxy sets,
+     * e.g. TRAFFIC_BEACON_IP_HEADER=CF-Connecting-IP. Only set it when every request
+     * really comes through that proxy, because clients can forge headers.
+     */
+    private function visitorIp(Request $request): ?string
+    {
+        $header = $this->config['ip_header'] ?? null;
+
+        if (is_string($header) && $header !== '') {
+            $value = trim(explode(',', (string) $request->header($header))[0]);
+
+            if (filter_var($value, FILTER_VALIDATE_IP) !== false) {
+                return $value;
+            }
+        }
+
+        return $request->ip();
+    }
+
+    private function isBot(Request $request): bool
+    {
+        $userAgent = (string) $request->userAgent();
+
+        return $userAgent === '' || preg_match(self::BOT_PATTERN, $userAgent) === 1;
     }
 
     private function pathGroup(Request $request): string
