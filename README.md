@@ -192,6 +192,9 @@ The Redis tests run when a Redis server is reachable on `127.0.0.1:6379` (or `RE
 
 ## Changelog
 
+### v0.1.4
+- **Supports Guzzle 8:** the package now allows `guzzlehttp/guzzle` `^7.8|^8.0`, so Laravel 13 sites can use Guzzle 8. Laravel 12 sites keep Guzzle 7.
+
 ### v0.1.3
 - **A dashboard outage no longer ties up a worker:** a flush stops at the first failed batch instead of waiting out a timeout for each one.
 - **The scheduled flush can't get stuck:** its overlap lock now expires after a minute, not 24 hours.
