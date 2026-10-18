@@ -13,7 +13,15 @@ class FlushBeacons extends Command
 
     public function handle(BeaconBuffer $buffer): int
     {
-        $this->components->info("Sent {$buffer->flush()} beacons.");
+        $result = $buffer->flush();
+
+        if ($result->dropped() > 0) {
+            $this->components->error("Sent {$result->sent} beacons, dropped {$result->dropped()}. Check the log for why.");
+
+            return self::FAILURE;
+        }
+
+        $this->components->info("Sent {$result->sent} beacons.");
 
         return self::SUCCESS;
     }

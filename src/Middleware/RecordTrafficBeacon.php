@@ -156,10 +156,22 @@ class RecordTrafficBeacon
     }
 
     /**
+     * Cloudflare's visitor location headers, only when the request is known to
+     * have come through Cloudflare: from a proxy Laravel trusts, or with the site
+     * declaring every request comes via Cloudflare (ip_header CF-Connecting-IP).
+     * Otherwise visitors could send the headers themselves and fake a location.
+     *
      * @return array<string, float|string>|null
      */
     private function cloudflareLocation(Request $request): ?array
     {
+        $viaCloudflare = $request->isFromTrustedProxy()
+            || strcasecmp((string) ($this->config['ip_header'] ?? ''), 'CF-Connecting-IP') === 0;
+
+        if (! $viaCloudflare) {
+            return null;
+        }
+
         $latitude = $request->header('CF-IPLatitude');
         $longitude = $request->header('CF-IPLongitude');
 
