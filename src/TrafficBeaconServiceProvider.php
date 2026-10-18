@@ -28,12 +28,9 @@ class TrafficBeaconServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        // Publishable even while the beacon is off, so a fresh install can be configured.
-        if ($this->app->runningInConsole()) {
-            $this->publishes([
-                __DIR__.'/../config/traffic-beacon.php' => config_path('traffic-beacon.php'),
-            ], 'traffic-beacon-config');
-        }
+        $this->publishes([
+            __DIR__.'/../config/traffic-beacon.php' => config_path('traffic-beacon.php'),
+        ], 'traffic-beacon-config');
 
         // Never record the host app's own test runs.
         if (! config('traffic-beacon.enabled') || $this->app->runningUnitTests()) {
@@ -45,15 +42,8 @@ class TrafficBeaconServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([FlushBeacons::class]);
 
-            // Runs inside the long-lived `schedule:run` process rather than as an
-            // artisan command, which would boot the whole app 12 times a minute.
-            // The lock lasts a minute: the default 24 hours would stop flushing
-            // for a day if a flush is killed.
             $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
-                $schedule->call(fn (BeaconBuffer $buffer) => $buffer->flush())
-                    ->name('traffic-beacon:flush')
-                    ->everyFiveSeconds()
-                    ->withoutOverlapping(1);
+                $schedule->command('traffic-beacon:flush')->everyFiveSeconds()->withoutOverlapping();
             });
         }
     }
