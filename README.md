@@ -3,7 +3,7 @@
 Reports anonymised request beacons from a Laravel site to the BitPixel Deployment Monitor, so its visitors show up live on the dashboard's globe.
 
 - **Global middleware**: it registers itself, so no code changes are needed.
-- **Reports the matched route pattern** (e.g. `/posts/{post}`), the status, the duration and the visitor IP. It never sends the concrete URL, query strings or IDs. The IP is only used by the dashboard to look up a city and is not stored.
+- **Reports the matched route pattern** (e.g. `/posts/{post}`), the status, the duration and the visitor IP. It never sends the concrete URL, query strings or IDs. The dashboard uses the IP to look up a city and shows it in its incoming feed; it keeps each request for 2 days, then deletes it.
 - **Runs after the response is sent** and never throws, so it can't slow down or break the site.
 - **Batches beacons** and sends them at most every 5 seconds.
 
