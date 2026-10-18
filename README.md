@@ -7,29 +7,119 @@ Reports anonymised request beacons from a Laravel site to the BitPixel Deploymen
 - **Runs after the response is sent** and never throws, so it can't slow down or break the site.
 - **Batches beacons** and sends them at most every 5 seconds.
 
-Requires PHP 8.3+ and Laravel 12 or 13.
+## Requirements
 
-## Install
+- PHP 8.3 or higher
+- Laravel 12 or 13
+- Access to the private GitHub repository
+- An ingest token for the site, issued on the dashboard
 
-1. In the dashboard, go to **Manage → Sites**, open the site and click **Issue token**. Copy the `.env` lines it shows; the token is shown once.
-2. In the site's project, add the private repository and require the package:
+## Install From Private GitHub
 
-   ```bash
-   composer config repositories.traffic-beacon vcs git@github.com:bitpixelmy/traffic-beacon.git
-   composer require bitpixel/traffic-beacon:^0.1
-   ```
+### 1. Create a GitHub fine-grained personal access token
 
-   The server that runs `composer install` needs read access to `bitpixelmy/traffic-beacon`, e.g. a deploy key or a GitHub token.
+Create a GitHub fine-grained personal access token that can read this private repository.
 
-3. Add to the site's `.env` and deploy:
+1. Go to GitHub `Settings` > `Developer settings` > `Personal access tokens` > `Fine-grained tokens`.
+2. Click `Generate new token`.
+3. Set a token name, for example:
 
-   ```dotenv
-   TRAFFIC_BEACON_ENABLED=true
-   TRAFFIC_BEACON_ENDPOINT=https://deployment.bitpixel.app/ingest
-   TRAFFIC_BEACON_TOKEN=bpx_…
-   ```
+```txt
+Composer - BitPixel Traffic Beacon
+```
 
-4. Keep the site's scheduler running (`php artisan schedule:run` every minute). It sends the last few beacons when traffic goes quiet.
+4. Choose the correct resource owner, such as your user account or organization.
+5. Under `Repository access`, choose `Only select repositories`.
+6. Select:
+
+```txt
+bitpixelmy/traffic-beacon
+```
+
+7. Under `Repository permissions`, set:
+
+```txt
+Contents: Read-only
+Metadata: Read-only
+```
+
+8. Generate the token and copy it immediately. GitHub only shows the token once.
+
+If you use a classic personal access token instead, enable the `repo` scope.
+
+### 2. Configure Composer authentication
+
+Run this on the machine or server that will install the package:
+
+```bash
+composer config --global --auth github-oauth.github.com YOUR_GITHUB_TOKEN
+```
+
+Do not commit the token to your project.
+
+### 3. Add the private repository
+
+In the consuming Laravel project's `composer.json`, add:
+
+```json
+{
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/bitpixelmy/traffic-beacon.git"
+        }
+    ]
+}
+```
+
+### 4. Install the package
+
+```bash
+composer require bitpixel/traffic-beacon:^0.1
+```
+
+## Configuration
+
+Publish the config file:
+
+```bash
+php artisan vendor:publish --tag=traffic-beacon-config
+```
+
+This creates `config/traffic-beacon.php` in the consuming app, where you can also change the excluded paths, batch size and buffer cap.
+
+In the dashboard, go to **Manage → Sites**, open the site and click **Issue token**. Copy the `.env` lines it shows; the token is shown once. Then add these values to the consuming Laravel app's `.env` file:
+
+```env
+TRAFFIC_BEACON_ENABLED=true
+TRAFFIC_BEACON_ENDPOINT=https://deployment.bitpixel.app/ingest
+TRAFFIC_BEACON_TOKEN=bpx_…
+```
+
+Optional settings:
+
+```env
+TRAFFIC_BEACON_FLUSH_INTERVAL=5
+TRAFFIC_BEACON_SAMPLE_RATE=1.0
+TRAFFIC_BEACON_IGNORE_BOTS=true
+TRAFFIC_BEACON_IP_HEADER=CF-Connecting-IP
+TRAFFIC_BEACON_CACHE_STORE=redis
+TRAFFIC_BEACON_SPOOL_PATH=/path/to/spool
+```
+
+| Env | Default | Purpose |
+| --- | --- | --- |
+| `TRAFFIC_BEACON_ENABLED` | `true` | Turn the beacon on or off without uninstalling it. Required. |
+| `TRAFFIC_BEACON_ENDPOINT` | — | The dashboard's `/ingest` URL. Required. |
+| `TRAFFIC_BEACON_TOKEN` | — | The site's ingest token. Required. |
+| `TRAFFIC_BEACON_FLUSH_INTERVAL` | `5` | Seconds between sends. |
+| `TRAFFIC_BEACON_SAMPLE_RATE` | `1.0` | Fraction of requests to record. |
+| `TRAFFIC_BEACON_IGNORE_BOTS` | `true` | Skip bots and requests without a user agent. |
+| `TRAFFIC_BEACON_IP_HEADER` | — | Header with the real visitor IP, e.g. `CF-Connecting-IP`. |
+| `TRAFFIC_BEACON_CACHE_STORE` | default store | The store checked for Redis. |
+| `TRAFFIC_BEACON_SPOOL_PATH` | `storage/framework/cache/traffic-beacon` | Where the spool file lives when Redis isn't used. |
+
+Keep the site's scheduler running (`php artisan schedule:run` every minute). It sends the last few beacons when traffic goes quiet.
 
 ## Turning it on or off
 
@@ -41,7 +131,7 @@ The change takes effect on the next request. If the site caches its config (`php
 
 | Site's cache store | Buffer | Notes |
 | --- | --- | --- |
-| Redis 6.2+ | A Redis list | Shared by all servers behind a load balancer. Set `TRAFFIC_BEACON_CACHE_STORE=redis` if Redis isn't the default store. |
+| Redis | A Redis list | Shared by all servers behind a load balancer. Set `TRAFFIC_BEACON_CACHE_STORE=redis` if Redis isn't the default store. |
 | Anything else | A spool file on local disk | `storage/framework/cache/traffic-beacon`. One appended line per request. Each server flushes its own file. |
 
 Both cost O(1) per request. If the dashboard is down, batches are dropped rather than retried, and the buffer is capped at `max_buffer` beacons.
@@ -54,7 +144,7 @@ The beacon uses `$request->ip()`, which is only the visitor's IP when Laravel tr
   - Trust Cloudflare's IPs in the site, e.g. with a package like `monicahq/laravel-cloudflare`, or with `trustProxies(at: [...])` in `bootstrap/app.php`.
   - Or set `TRAFFIC_BEACON_IP_HEADER=CF-Connecting-IP`.
 
-  Also turn on **Rules → Managed Transforms → Add visitor location headers**. The beacon then sends Cloudflare's own city and coordinates, and no IP lookup is needed.
+  Also turn on **Rules → Managed Transforms → Add visitor location headers**. The beacon then sends Cloudflare's own city and coordinates, and no IP lookup is needed. These headers are only used when the request came from a proxy Laravel trusts, or when `TRAFFIC_BEACON_IP_HEADER=CF-Connecting-IP`, so visitors can't fake them.
 - **Load balancer or another proxy:** trust it with `trustProxies(at: '…')`, or set `TRAFFIC_BEACON_IP_HEADER=X-Forwarded-For`. The first address in the header is used.
 
 > Only set `TRAFFIC_BEACON_IP_HEADER` when **every** request reaches the site through that proxy. Otherwise visitors can send the header themselves and fake their location.
@@ -66,29 +156,52 @@ The beacon uses `$request->ip()`, which is only the visitor's IP when Laravel tr
 - **Tools:** health checks (`/up`), Horizon, Pulse, Telescope and Debugbar.
 - **Odd methods:** HTTP methods other than GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS.
 
-To change the exclusions, publish the config:
+To change the exclusions, edit the `except` list in the published `config/traffic-beacon.php`.
 
-```bash
-php artisan vendor:publish --tag=traffic-beacon-config
-```
-
-## Configuration
-
-| Env | Default | Purpose |
-| --- | --- | --- |
-| `TRAFFIC_BEACON_ENDPOINT` | — | The dashboard's `/ingest` URL. Required. |
-| `TRAFFIC_BEACON_TOKEN` | — | The site's ingest token. Required. |
-| `TRAFFIC_BEACON_ENABLED` | `true` | Turn the beacon on or off without uninstalling it. |
-| `TRAFFIC_BEACON_FLUSH_INTERVAL` | `5` | Seconds between sends. |
-| `TRAFFIC_BEACON_SAMPLE_RATE` | `1.0` | Fraction of requests to record. |
-| `TRAFFIC_BEACON_IGNORE_BOTS` | `true` | Skip bots and requests without a user agent. |
-| `TRAFFIC_BEACON_IP_HEADER` | — | Header with the real visitor IP, e.g. `CF-Connecting-IP`. |
-| `TRAFFIC_BEACON_CACHE_STORE` | default store | The store checked for Redis. |
-| `TRAFFIC_BEACON_SPOOL_PATH` | `storage/framework/cache/traffic-beacon` | Where the spool file lives when Redis isn't used. |
+## Laravel Octane
 
 The beacon also works under Laravel Octane: request duration is measured per request, not from when the worker started.
 
+## Deployment Notes
+
+For CI or deployment servers, configure Composer auth before running `composer install`:
+
+```bash
+composer config --global --auth github-oauth.github.com "$GITHUB_TOKEN"
+composer install --no-dev --optimize-autoloader
+```
+
+You can also use the `COMPOSER_AUTH` environment variable:
+
+```bash
+COMPOSER_AUTH='{"github-oauth":{"github.com":"YOUR_GITHUB_TOKEN"}}'
+```
+
+Keep tokens in your deployment secret manager, not in Git.
+
+## Testing This Package
+
+Inside this package repo:
+
+```bash
+composer install
+vendor/bin/pest
+```
+
+The Redis tests run when a Redis server is reachable on `127.0.0.1:6379` (or `REDIS_HOST`/`REDIS_PORT`) and are skipped otherwise.
+
 ## Changelog
+
+### v0.1.3
+- **A dashboard outage no longer ties up a worker:** a flush stops at the first failed batch instead of waiting out a timeout for each one.
+- **The scheduled flush can't get stuck:** its overlap lock now expires after a minute, not 24 hours.
+- **Redis buffer works on any Redis version and client:** pushing and taking beacons are single atomic Lua scripts, so Redis 6.2 is no longer needed.
+- **Cloudflare location headers are only trusted when the request really came through Cloudflare**, so visitors can't fake their location.
+- **`traffic-beacon:flush` reports dropped beacons** and exits with a failure when the dashboard rejects them.
+- **No more lost beacons in the spool file:** an append that a flush overtakes between opening and locking the file now retries on the new file instead of writing to one that has already been sent.
+- **A full spool drops the oldest beacons, not the newest:** it is moved aside as an overflow file, so it uses at most twice the cap on disk.
+- **The scheduled flush is much cheaper:** it runs inside `schedule:run` instead of starting the app as an artisan command 12 times a minute.
+- **Requires `laravel/framework` and `guzzlehttp/guzzle`** instead of separate `illuminate/*` packages, matching what the package actually uses.
 
 ### v0.1.2
 - **`TRAFFIC_BEACON_ENABLED` accepts more values:** `on`/`off`, `yes`/`no` and `1`/`0`, not just `true`/`false`. Anything unrecognised turns it off.

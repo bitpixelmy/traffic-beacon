@@ -14,12 +14,15 @@ use Throwable;
  * A buffer shared by every worker, flushed to the dashboard's POST /ingest
  * endpoint at most once per configured interval.
  *
- * - On a Redis cache store the buffer is a Redis list, so recording a beacon is
- *   a single atomic RPUSH + LTRIM no matter how full the buffer is.
+ * - On a Redis cache store the buffer is a Redis list. Recording and taking
+ *   beacons are each one Lua script, so they are atomic, cost one round trip
+ *   and work on any Redis version.
  * - On any other store it is an append-only spool file on the local disk: each
  *   request appends one line under a file lock, and a flush atomically renames
- *   the file away before reading it. Both are O(1) per request, so sites
- *   without Redis can run the beacon under real traffic too.
+ *   the file away before reading it. When the spool fills up it is moved aside
+ *   as the overflow file, replacing the previous one, so the oldest beacons are
+ *   dropped first. Both are O(1) per request, so sites without Redis can run
+ *   the beacon under real traffic too.
  *
  * Nothing here ever throws: the beacon must never be able to break the site.
  *
@@ -35,13 +38,39 @@ class BeaconBuffer
 
     private const string SPOOL_FILE = 'buffer.jsonl';
 
+    private const string OVERFLOW_FILE = 'overflow.jsonl';
+
+    private const int APPEND_ATTEMPTS = 5;
+
     private const string FLUSHED_MARKER = 'flushed';
 
     /**
-     * Upper bound on the spool file per buffered beacon, so a dashboard outage
-     * can't fill the disk. A beacon is ~150-300 bytes as JSON.
+     * Size of a full spool file per buffered beacon. With the overflow file the
+     * spool takes at most twice this, so a dashboard outage can't fill the disk.
+     * A beacon is ~150-300 bytes as JSON.
      */
     private const int SPOOL_BYTES_PER_BEACON = 1024;
+
+    /**
+     * Append a beacon, keep only the newest ARGV[2] and refresh the TTL.
+     */
+    private const string PUSH_SCRIPT = <<<'LUA'
+        redis.call('rpush', KEYS[1], ARGV[1])
+        redis.call('ltrim', KEYS[1], -tonumber(ARGV[2]), -1)
+        redis.call('expire', KEYS[1], tonumber(ARGV[3]))
+        return 1
+        LUA;
+
+    /**
+     * Pop up to ARGV[1] beacons from the head of the list in one atomic step.
+     * Unlike LPOP with a count, this needs neither Redis 6.2 nor a client that
+     * passes the count through.
+     */
+    private const string TAKE_SCRIPT = <<<'LUA'
+        local items = redis.call('lrange', KEYS[1], 0, tonumber(ARGV[1]) - 1)
+        redis.call('ltrim', KEYS[1], #items, -1)
+        return items
+        LUA;
 
     /**
      * @param  array<string, mixed>  $config
@@ -57,23 +86,66 @@ class BeaconBuffer
             $json = json_encode($beacon, JSON_THROW_ON_ERROR);
 
             if ($redis = $this->redis()) {
-                $key = $this->redisKey();
-                $redis->command('rpush', [$key, $json]);
-                $redis->command('ltrim', [$key, -$this->maxBuffer(), -1]);
-                $redis->command('expire', [$key, self::TTL_SECONDS]);
+                $redis->eval(self::PUSH_SCRIPT, 1, $this->redisKey(), $json, $this->maxBuffer(), self::TTL_SECONDS);
 
                 return;
             }
 
-            $file = $this->spoolFile();
-            clearstatcache(true, $file);
-
-            if (is_file($file) && filesize($file) >= $this->maxBuffer() * self::SPOOL_BYTES_PER_BEACON) {
-                return;
-            }
-
-            file_put_contents($file, $json."\n", FILE_APPEND | LOCK_EX);
+            $this->appendToSpool($json."\n");
         });
+    }
+
+    /**
+     * Append a line to the spool under an exclusive lock. A flush (or an overflow
+     * rotation) can rename the file between our fopen and flock, and a line
+     * written then would land in a file that has already been read. So once the
+     * lock is held, the handle must still be the file at the spool path;
+     * otherwise it is reopened.
+     */
+    private function appendToSpool(string $line): void
+    {
+        $file = $this->spoolFile();
+        $directory = $this->spoolDirectory();
+
+        for ($attempt = 0; $attempt < self::APPEND_ATTEMPTS; $attempt++) {
+            $handle = fopen($file, 'a');
+
+            if ($handle === false) {
+                return;
+            }
+
+            try {
+                $this->lockSpool($handle);
+                clearstatcache(true, $file);
+                $atPath = @stat($file);
+                $locked = fstat($handle);
+
+                if ($atPath === false || $atPath['ino'] !== $locked['ino'] || $atPath['dev'] !== $locked['dev']) {
+                    continue;
+                }
+
+                if ($locked['size'] >= $this->maxBuffer() * self::SPOOL_BYTES_PER_BEACON) {
+                    rename($file, $directory.'/'.self::OVERFLOW_FILE);
+
+                    continue;
+                }
+
+                fwrite($handle, $line);
+
+                return;
+            } finally {
+                flock($handle, LOCK_UN);
+                fclose($handle);
+            }
+        }
+    }
+
+    /**
+     * @param  resource  $handle
+     */
+    protected function lockSpool($handle): void
+    {
+        flock($handle, LOCK_EX);
     }
 
     /**
@@ -104,19 +176,28 @@ class BeaconBuffer
     }
 
     /**
-     * Send every buffered beacon now and return how many were taken from the
-     * buffer. Failed batches are dropped rather than retried, so a dashboard
-     * outage never slows the site down or grows the buffer without bound.
+     * Send every buffered beacon now. Failed batches are dropped rather than
+     * retried, and the first failure drops the rest of this flush too, so a
+     * dashboard outage costs one request's timeout per flush, not one per batch.
      */
-    public function flush(): int
+    public function flush(): FlushResult
     {
         $beacons = $this->safely(fn (): array => $this->take()) ?? [];
+        $sent = 0;
 
         foreach (array_chunk($beacons, max(1, (int) $this->config['batch_size'])) as $batch) {
-            $this->send($batch);
+            if (! $this->send($batch)) {
+                if ($skipped = count($beacons) - $sent - count($batch)) {
+                    Log::warning('Traffic beacon skipped the rest of a flush after a failed batch.', ['beacons' => $skipped]);
+                }
+
+                break;
+            }
+
+            $sent += count($batch);
         }
 
-        return count($beacons);
+        return new FlushResult(taken: count($beacons), sent: $sent);
     }
 
     /**
@@ -127,8 +208,7 @@ class BeaconBuffer
     private function take(): array
     {
         if ($redis = $this->redis()) {
-            // LPOP with a count (Redis 6.2+) pops the whole buffer in one atomic step.
-            $popped = $redis->command('lpop', [$this->redisKey(), $this->maxBuffer()]);
+            $popped = $redis->eval(self::TAKE_SCRIPT, 1, $this->redisKey(), $this->maxBuffer());
 
             return $this->decode(is_array($popped) ? $popped : []);
         }
@@ -137,27 +217,35 @@ class BeaconBuffer
     }
 
     /**
-     * Claim the spool file by renaming it (atomic, so concurrent flushes can't both
-     * take it), wait for any append still holding its lock, then read and delete it.
-     * Claimed files abandoned by a crashed flush for over a minute are picked up too.
+     * Claim the overflow and spool files by renaming them (atomic, so concurrent
+     * flushes can't both take one), wait for any append still holding a lock,
+     * then read and delete them, oldest first. Claimed files abandoned by a
+     * crashed flush for over a minute are picked up too.
      *
      * @return list<array<mixed>>
      */
     private function takeSpool(): array
     {
         $directory = $this->spoolDirectory();
-        $claimed = $directory.'/flushing-'.time().'-'.bin2hex(random_bytes(6)).'.jsonl';
+        $claimId = time().'-'.bin2hex(random_bytes(6));
+        $claimed = [];
 
-        $files = @rename($directory.'/'.self::SPOOL_FILE, $claimed) ? [$claimed] : [];
+        foreach ([self::OVERFLOW_FILE, self::SPOOL_FILE] as $index => $name) {
+            $claim = "{$directory}/flushing-{$claimId}-{$index}.jsonl";
 
-        foreach (glob($directory.'/flushing-*.jsonl') ?: [] as $file) {
-            $claimedAt = (int) explode('-', basename($file))[1];
-
-            if ($file !== $claimed && $claimedAt < time() - 60) {
-                $files[] = $file;
+            if (@rename("{$directory}/{$name}", $claim)) {
+                $claimed[] = $claim;
             }
         }
 
+        $abandoned = array_filter(
+            glob($directory.'/flushing-*.jsonl') ?: [],
+            fn (string $file): bool => ! in_array($file, $claimed, true)
+                && (int) explode('-', basename($file))[1] < time() - 60,
+        );
+        sort($abandoned);
+
+        $files = [...$abandoned, ...$claimed];
         $lines = [];
 
         foreach ($files as $file) {
@@ -196,7 +284,7 @@ class BeaconBuffer
     /**
      * @param  list<array<mixed>>  $batch
      */
-    private function send(array $batch): void
+    private function send(array $batch): bool
     {
         try {
             $response = Http::withToken((string) $this->config['token'])
@@ -211,12 +299,18 @@ class BeaconBuffer
                     'beacons' => count($batch),
                     'hint' => $response->status() === 401 ? 'Check TRAFFIC_BEACON_TOKEN.' : null,
                 ]);
+
+                return false;
             }
+
+            return true;
         } catch (Throwable $exception) {
             Log::warning('Traffic beacon batch could not be sent.', [
                 'beacons' => count($batch),
                 'error' => $exception->getMessage(),
             ]);
+
+            return false;
         }
     }
 
