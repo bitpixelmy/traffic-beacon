@@ -25,6 +25,16 @@ return [
 
     'batch_size' => 500,
 
+    /*
+    | Also flush every few seconds from the site's scheduler, so the last
+    | beacons before traffic goes quiet aren't left waiting for the next
+    | request: TRAFFIC_BEACON_SCHEDULE_FLUSH=true|false. Off by default,
+    | because a task that repeats more often than once a minute keeps
+    | `schedule:run` running for the whole minute. Needs the scheduler.
+    */
+
+    'schedule_flush' => filter_var(env('TRAFFIC_BEACON_SCHEDULE_FLUSH', false), FILTER_VALIDATE_BOOLEAN),
+
     'max_buffer' => 5000,
 
     'timeout' => 2,

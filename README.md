@@ -66,6 +66,7 @@ Optional settings:
 
 ```env
 TRAFFIC_BEACON_FLUSH_INTERVAL=5
+TRAFFIC_BEACON_SCHEDULE_FLUSH=false
 TRAFFIC_BEACON_SAMPLE_RATE=1.0
 TRAFFIC_BEACON_IGNORE_BOTS=true
 TRAFFIC_BEACON_IP_HEADER=CF-Connecting-IP
@@ -79,13 +80,20 @@ TRAFFIC_BEACON_SPOOL_PATH=/path/to/spool
 | `TRAFFIC_BEACON_ENDPOINT` | — | The dashboard's `/ingest` URL. Required. |
 | `TRAFFIC_BEACON_TOKEN` | — | The site's ingest token. Required. |
 | `TRAFFIC_BEACON_FLUSH_INTERVAL` | `5` | Seconds between sends. |
+| `TRAFFIC_BEACON_SCHEDULE_FLUSH` | `false` | Also flush every 5 seconds from the scheduler. See below. |
 | `TRAFFIC_BEACON_SAMPLE_RATE` | `1.0` | Fraction of requests to record. |
 | `TRAFFIC_BEACON_IGNORE_BOTS` | `true` | Skip bots and requests without a user agent. |
 | `TRAFFIC_BEACON_IP_HEADER` | — | Header with the real visitor IP, e.g. `CF-Connecting-IP`. |
 | `TRAFFIC_BEACON_CACHE_STORE` | default store | The store checked for Redis. |
 | `TRAFFIC_BEACON_SPOOL_PATH` | `storage/framework/cache/traffic-beacon` | Where the spool file lives when Redis isn't used. |
 
-Keep the site's scheduler running (`php artisan schedule:run` every minute). It sends the last few beacons when traffic goes quiet.
+### Scheduled flush (optional)
+
+The scheduler isn't needed. Each request sends the buffer once `TRAFFIC_BEACON_FLUSH_INTERVAL` has passed since the last send, so on a quiet site a visit is usually sent straight away. Beacons only wait when they arrive within a few seconds of a send. They then go out with the next request after the interval. With Redis, they're lost if no request comes for 5 minutes.
+
+To send those too, set `TRAFFIC_BEACON_SCHEDULE_FLUSH=true` and keep the site's scheduler running (`php artisan schedule:run` every minute). The beacon then flushes every 5 seconds from the scheduler. A task that repeats more often than once a minute keeps `schedule:run` running for the whole minute instead of exiting, which is why this is off by default. With spool files on several servers, it only flushes the server that runs the scheduler.
+
+You can also send the buffer by hand with `php artisan traffic-beacon:flush`.
 
 ## Turning it on or off
 
@@ -144,6 +152,9 @@ The Redis tests run when a Redis server is reachable on `127.0.0.1:6379` (or `RE
 Proprietary. This package is only for BitPixel's own sites. The repository is public so sites can install it without a GitHub token, but that doesn't grant a licence to use it anywhere else. See [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.1.5
+- **The scheduled flush is now optional and off by default.** Set `TRAFFIC_BEACON_SCHEDULE_FLUSH=true` to turn it back on. Each request already sends the buffer once the flush interval has passed, so the scheduler only catches the last few beacons before traffic goes quiet. Turning it off also stops `schedule:run` from staying alive for the whole minute. The `traffic-beacon:flush` command is still available.
 
 ### v0.1.4
 - **Supports Guzzle 8:** the package now allows `guzzlehttp/guzzle` `^7.8|^8.0`, so Laravel 13 sites can use Guzzle 8. Laravel 12 sites keep Guzzle 7.

@@ -10,8 +10,8 @@ use Illuminate\Support\ServiceProvider;
 
 /**
  * Installs the beacon middleware globally. Beacons are flushed from the
- * middleware once per interval; a scheduled flush every few seconds catches
- * the tail of the buffer when traffic goes quiet.
+ * middleware once per interval; an optional scheduled flush every few seconds
+ * catches the tail of the buffer when traffic goes quiet.
  */
 class TrafficBeaconServiceProvider extends ServiceProvider
 {
@@ -42,9 +42,13 @@ class TrafficBeaconServiceProvider extends ServiceProvider
 
         $this->app->make(Kernel::class)->pushMiddleware(RecordTrafficBeacon::class);
 
-        if ($this->app->runningInConsole()) {
-            $this->commands([FlushBeacons::class]);
+        if (! $this->app->runningInConsole()) {
+            return;
+        }
 
+        $this->commands([FlushBeacons::class]);
+
+        if (config('traffic-beacon.schedule_flush')) {
             // Runs inside the long-lived `schedule:run` process rather than as an
             // artisan command, which would boot the whole app 12 times a minute.
             // The lock lasts a minute: the default 24 hours would stop flushing

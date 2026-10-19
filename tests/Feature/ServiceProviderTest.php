@@ -6,6 +6,7 @@ use Bitpixel\TrafficBeacon\TrafficBeaconServiceProvider;
 use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -24,7 +25,15 @@ function scheduledFlush(): ?CallbackEvent
         ->first(fn ($event) => $event->description === 'traffic-beacon:flush');
 }
 
-it('schedules the flush in-process with a one-minute overlap lock', function () {
+it('does not schedule a flush by default', function () {
+    bootInProduction();
+
+    expect(scheduledFlush())->toBeNull()
+        ->and(Artisan::all())->toHaveKey('traffic-beacon:flush');
+});
+
+it('schedules the flush in-process with a one-minute overlap lock when turned on', function () {
+    config()->set('traffic-beacon.schedule_flush', true);
     bootInProduction();
 
     $event = scheduledFlush();
@@ -39,6 +48,7 @@ it('schedules the flush in-process with a one-minute overlap lock', function () 
 
 it('sends buffered beacons when the scheduled flush runs', function () {
     Http::fake(['dashboard.test/*' => Http::response(['ok' => true])]);
+    config()->set('traffic-beacon.schedule_flush', true);
     bootInProduction();
     app(BeaconBuffer::class)->push($this->beacon());
 
