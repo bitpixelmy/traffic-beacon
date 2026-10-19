@@ -11,55 +11,13 @@ Reports anonymised request beacons from a Laravel site to the BitPixel Deploymen
 
 - PHP 8.3 or higher
 - Laravel 12 or 13
-- Access to the private GitHub repository
 - An ingest token for the site, issued on the dashboard
 
-## Install From Private GitHub
+## Install
 
-### 1. Create a GitHub fine-grained personal access token
+### 1. Add the repository
 
-Create a GitHub fine-grained personal access token that can read this private repository.
-
-1. Go to GitHub `Settings` > `Developer settings` > `Personal access tokens` > `Fine-grained tokens`.
-2. Click `Generate new token`.
-3. Set a token name, for example:
-
-```txt
-Composer - BitPixel Traffic Beacon
-```
-
-4. Choose the correct resource owner, such as your user account or organization.
-5. Under `Repository access`, choose `Only select repositories`.
-6. Select:
-
-```txt
-bitpixelmy/traffic-beacon
-```
-
-7. Under `Repository permissions`, set:
-
-```txt
-Contents: Read-only
-Metadata: Read-only
-```
-
-8. Generate the token and copy it immediately. GitHub only shows the token once.
-
-If you use a classic personal access token instead, enable the `repo` scope.
-
-### 2. Configure Composer authentication
-
-Run this on the machine or server that will install the package:
-
-```bash
-composer config --global --auth github-oauth.github.com YOUR_GITHUB_TOKEN
-```
-
-Do not commit the token to your project.
-
-### 3. Add the private repository
-
-In the consuming Laravel project's `composer.json`, add:
+The package isn't on Packagist, so tell Composer where to find it. In the consuming Laravel project's `composer.json`, add:
 
 ```json
 {
@@ -72,11 +30,19 @@ In the consuming Laravel project's `composer.json`, add:
 }
 ```
 
-### 4. Install the package
+Or run:
+
+```bash
+composer config repositories.traffic-beacon vcs https://github.com/bitpixelmy/traffic-beacon.git
+```
+
+### 2. Install the package
 
 ```bash
 composer require bitpixel/traffic-beacon:^0.1
 ```
+
+The repository is public, so no GitHub token or Composer authentication is needed.
 
 ## Configuration
 
@@ -92,7 +58,7 @@ In the dashboard, go to **Manage → Sites**, open the site and click **Issue to
 
 ```env
 TRAFFIC_BEACON_ENABLED=true
-TRAFFIC_BEACON_ENDPOINT=https://deployment.bitpixel.app/ingest
+TRAFFIC_BEACON_ENDPOINT=https://your-dashboard-domain.com/ingest
 TRAFFIC_BEACON_TOKEN=bpx_…
 ```
 
@@ -162,23 +128,6 @@ To change the exclusions, edit the `except` list in the published `config/traffi
 
 The beacon also works under Laravel Octane: request duration is measured per request, not from when the worker started.
 
-## Deployment Notes
-
-For CI or deployment servers, configure Composer auth before running `composer install`:
-
-```bash
-composer config --global --auth github-oauth.github.com "$GITHUB_TOKEN"
-composer install --no-dev --optimize-autoloader
-```
-
-You can also use the `COMPOSER_AUTH` environment variable:
-
-```bash
-COMPOSER_AUTH='{"github-oauth":{"github.com":"YOUR_GITHUB_TOKEN"}}'
-```
-
-Keep tokens in your deployment secret manager, not in Git.
-
 ## Testing This Package
 
 Inside this package repo:
@@ -189,6 +138,10 @@ vendor/bin/pest
 ```
 
 The Redis tests run when a Redis server is reachable on `127.0.0.1:6379` (or `REDIS_HOST`/`REDIS_PORT`) and are skipped otherwise.
+
+## License
+
+Proprietary. This package is only for BitPixel's own sites. The repository is public so sites can install it without a GitHub token, but that doesn't grant a licence to use it anywhere else. See [LICENSE](LICENSE).
 
 ## Changelog
 
