@@ -173,12 +173,12 @@ it('sends after the response, with the route and URL without the query string', 
     // Sent as the request terminated.
     expect($reporter->pending())->toBe([])
         ->and(Http::recorded(fn (ClientRequest $request): bool => str_ends_with($request->url(), '/issues'))->first()[0]['issues'][0]['context'])->toMatchArray([
-        'type' => 'request',
-        'method' => 'GET',
-        'url' => 'http://localhost/orders/42',
-        'route' => '/orders/{order}',
-        'route_name' => 'orders.show',
-        'user_id' => null,
-        'user_agent' => 'Mozilla/5.0',
-    ]);
+            'type' => 'request',
+            'method' => 'GET',
+            'url' => 'http://localhost/orders/42',
+            'route' => '/orders/{order}',
+            'route_name' => 'orders.show',
+            'user_id' => null,
+            'user_agent' => 'Mozilla/5.0',
+        ]);
 });
