@@ -91,4 +91,30 @@ return [
 
     'spool_path' => env('TRAFFIC_BEACON_SPOOL_PATH', storage_path('framework/cache/traffic-beacon')),
 
+    /*
+    | Send the exceptions the site reports (its stack trace, the request's
+    | route and URL without the query string, the user ID) to the dashboard's
+    | Issues tab: TRAFFIC_BEACON_CAPTURE_EXCEPTIONS=true|false. Exceptions in
+    | the exception handler's `dontReport` list, like 404s and validation
+    | errors, are never sent. Uses the same token as the traffic beacon.
+    */
+
+    'capture_exceptions' => filter_var(env('TRAFFIC_BEACON_CAPTURE_EXCEPTIONS', true), FILTER_VALIDATE_BOOLEAN),
+
+    /*
+    | Where exceptions are sent. Leave empty to use the traffic endpoint with
+    | "/issues" added, e.g. https://your-dashboard-domain.com/ingest/issues.
+    */
+
+    'issues_endpoint' => env('TRAFFIC_BEACON_ISSUES_ENDPOINT'),
+
+    /*
+    | Each kind of exception (its class and where it was thrown) is sent at
+    | most once per this many seconds. The ones held back are counted and sent
+    | with the next report, so a crash on every request doesn't call the
+    | dashboard on every request. 0 sends every one.
+    */
+
+    'issue_throttle' => (int) env('TRAFFIC_BEACON_ISSUE_THROTTLE', 10),
+
 ];
