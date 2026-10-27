@@ -7,6 +7,7 @@ use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\ItemNotFoundException;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
@@ -17,6 +18,8 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 function bootReporterInProduction(): IssueReporter
 {
     app()->forgetInstance(IssueReporter::class);
+    // This package's root stands in for the site's, so paths come out relative.
+    app()->setBasePath(dirname(__DIR__, 2));
     app()->instance('env', 'production');
     (new TrafficBeaconServiceProvider(app()))->boot();
 
@@ -51,6 +54,8 @@ it('sends what the exception handler reports to the issues endpoint', function (
             && $issue['previous'][0]['class'] === LogicException::class
             && $issue['context']['type'] === 'command'
             && $issue['environment']['app_env'] === 'production'
+            && $issue['snippet']['file'] === 'tests/Feature/IssueReporterTest.php'
+            && $issue['snippet']['line'] === $issue['line']
             && $issue['snippet']['lines'] !== [];
     });
 });
@@ -76,6 +81,25 @@ it('marks vendor frames and keeps the stack innermost first', function () {
         ->and($trace[0]['app'])->toBeTrue()
         ->and(collect($trace)->where('app', false)->isNotEmpty())->toBeTrue()
         ->and(collect($trace)->every(fn (array $frame): bool => ! array_key_exists('args', $frame)))->toBeTrue();
+});
+
+it('shows the app code that led to an exception thrown inside vendor', function () {
+    $reporter = bootReporterInProduction();
+
+    try {
+        $line = __LINE__ + 1;
+        collect()->firstOrFail();
+    } catch (ItemNotFoundException $exception) {
+        $reporter->capture($exception);
+    }
+
+    $issue = $reporter->pending()[0];
+
+    expect($issue['file'])->toStartWith('vendor/laravel/framework/')
+        ->and($issue['trace'][0]['app'])->toBeFalse()
+        ->and($issue['snippet']['file'])->toBe('tests/Feature/IssueReporterTest.php')
+        ->and($issue['snippet']['line'])->toBe($line)
+        ->and($issue['snippet']['lines'])->toContain('        collect()->firstOrFail();');
 });
 
 it('skips exceptions the handler does not report', function () {

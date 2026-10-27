@@ -24,6 +24,9 @@ use Throwable;
  * ones held back are counted and sent with the next report, so a crash on every
  * request costs one call to the dashboard, not one per request.
  *
+ * The code around the app's own line closest to the throw is sent too, so an
+ * exception from inside vendor/ shows the app code that led to it.
+ *
  * Only the request's method, route, URL without its query string, user ID and
  * user agent are sent; never its headers, cookies, input or session. Stack
  * frames carry file, line and function, never their arguments.
@@ -31,7 +34,7 @@ use Throwable;
  * Nothing here ever throws: reporting must never be able to break the site.
  *
  * @phpstan-type Frame array{file: string|null, line: int|null, class: string|null, function: string|null, app: bool}
- * @phpstan-type Report array{class: string, message: string, code: string, file: string, line: int, trace: list<Frame>, snippet: array{start: int, lines: list<string>}|null, previous: list<array{class: string, message: string, file: string, line: int}>, context: array<string, mixed>, environment: array<string, string|null>, occurrences: int, timestamp: int}
+ * @phpstan-type Report array{class: string, message: string, code: string, file: string, line: int, trace: list<Frame>, snippet: array{file: string, line: int, start: int, lines: list<string>}|null, previous: list<array{class: string, message: string, file: string, line: int}>, context: array<string, mixed>, environment: array<string, string|null>, occurrences: int, timestamp: int}
  */
 class IssueReporter
 {
@@ -189,7 +192,7 @@ class IssueReporter
     }
 
     /**
-     * @return array{class: string, message: string, code: string, file: string, line: int, trace: list<Frame>, snippet: array{start: int, lines: list<string>}|null, previous: list<array{class: string, message: string, file: string, line: int}>, context: array<string, mixed>, environment: array<string, string|null>}
+     * @return array{class: string, message: string, code: string, file: string, line: int, trace: list<Frame>, snippet: array{file: string, line: int, start: int, lines: list<string>}|null, previous: list<array{class: string, message: string, file: string, line: int}>, context: array<string, mixed>, environment: array<string, string|null>}
      */
     private function report(Throwable $exception, string $file): array
     {
@@ -204,14 +207,16 @@ class IssueReporter
             ];
         }
 
+        $trace = $this->frames($exception);
+
         return [
             'class' => get_class($exception),
             'message' => Str::limit($exception->getMessage(), 2000, ''),
             'code' => Str::limit((string) $exception->getCode(), 50, ''),
             'file' => $file,
             'line' => $exception->getLine(),
-            'trace' => $this->frames($exception),
-            'snippet' => $this->snippet($exception->getFile(), $exception->getLine()),
+            'trace' => $trace,
+            'snippet' => $this->snippet($this->culprit($trace) ?? ['file' => $file, 'line' => $exception->getLine()]),
             'previous' => $previous,
             'context' => $this->context(),
             'environment' => [
@@ -247,7 +252,7 @@ class IssueReporter
                 'line' => isset($location['line']) ? (int) $location['line'] : null,
                 'class' => isset($trace[$index]['class']) ? (string) $trace[$index]['class'] : null,
                 'function' => isset($trace[$index]['function']) ? (string) $trace[$index]['function'] : null,
-                'app' => $file !== null && ! str_starts_with($file, 'vendor/'),
+                'app' => $file !== null && ! str_starts_with($file, 'vendor/') && ! str_contains($file, '/vendor/'),
             ];
         }
 
@@ -255,12 +260,35 @@ class IssueReporter
     }
 
     /**
-     * The lines around where the exception was thrown, when the file is readable.
+     * The app's own frame closest to where the exception was thrown: usually the
+     * line to fix, even when the exception itself came from inside vendor/. The
+     * front controllers (public/index.php, artisan) don't count.
      *
-     * @return array{start: int, lines: list<string>}|null
+     * @param  list<Frame>  $trace
+     * @return array{file: string, line: int}|null
      */
-    private function snippet(string $path, int $line): ?array
+    private function culprit(array $trace): ?array
     {
+        foreach ($trace as $frame) {
+            if ($frame['app'] && $frame['file'] !== null && $frame['line'] !== null && ! in_array($frame['file'], ['public/index.php', 'artisan'], true)) {
+                return ['file' => $frame['file'], 'line' => $frame['line']];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The lines around the given line, when its file is readable.
+     *
+     * @param  array{file: string, line: int}  $location  The file relative to the base path.
+     * @return array{file: string, line: int, start: int, lines: list<string>}|null
+     */
+    private function snippet(array $location): ?array
+    {
+        $path = str_starts_with($location['file'], '/') ? $location['file'] : $this->app->basePath($location['file']);
+        $line = $location['line'];
+
         if ($line < 1 || ! is_file($path) || ! is_readable($path)) {
             return null;
         }
@@ -274,6 +302,8 @@ class IssueReporter
         $start = max(1, $line - self::SNIPPET_RADIUS);
 
         return [
+            'file' => $location['file'],
+            'line' => $line,
             'start' => $start,
             'lines' => array_map(
                 fn (string $code): string => Str::limit($code, 300, ''),
