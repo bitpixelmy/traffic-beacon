@@ -30,7 +30,10 @@
         "laravel": {
             "providers": [
                 "Bitpixel\\TrafficBeacon\\TrafficBeaconServiceProvider"
-            ]
+            ],
+            "aliases": {
+                "TrafficBeacon": "Bitpixel\\TrafficBeacon\\Facades\\TrafficBeacon"
+            }
         }
     },
     "config": {
