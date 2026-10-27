@@ -94,6 +94,8 @@ class TrafficBeaconServiceProvider extends ServiceProvider
             }
         });
 
+        $this->app->make(IssueReporter::class)->listen();
+
         $flush = fn () => $this->app->make(IssueReporter::class)->flush();
 
         $this->app->terminating($flush);

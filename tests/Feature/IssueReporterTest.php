@@ -1,5 +1,6 @@
 <?php
 
+use Bitpixel\TrafficBeacon\Facades\TrafficBeacon;
 use Bitpixel\TrafficBeacon\IssueReporter;
 use Bitpixel\TrafficBeacon\TrafficBeaconServiceProvider;
 use Illuminate\Contracts\Debug\ExceptionHandler;
@@ -205,4 +206,39 @@ it('sends after the response, with the route and URL without the query string', 
             'user_id' => null,
             'user_agent' => 'Mozilla/5.0',
         ]);
+});
+
+it('reports a handled exception through the facade, even one the handler skips', function () {
+    bootReporterInProduction();
+    Log::spy();
+
+    try {
+        throw new NotFoundHttpException('Product feed is missing');
+    } catch (NotFoundHttpException $exception) {
+        TrafficBeacon::report($exception);
+    }
+
+    app()->terminate();
+
+    Log::shouldNotHaveReceived('error');
+    Http::assertSent(fn (ClientRequest $request): bool => $request['issues'][0]['class'] === NotFoundHttpException::class
+        && $request['issues'][0]['handled'] === true);
+});
+
+it('counts a handled and an unhandled exception from the same place apart', function () {
+    $reporter = bootReporterInProduction();
+    $exception = throwFromHere();
+
+    $reporter->capture($exception);
+    TrafficBeacon::report($exception);
+
+    expect(collect($reporter->pending())->pluck('handled')->all())->toBe([false, true]);
+});
+
+it('drops manual reports while the beacon is not listening, as in the site\'s own tests', function () {
+    app()->forgetInstance(IssueReporter::class);
+
+    TrafficBeacon::report(throwFromHere());
+
+    expect(app(IssueReporter::class)->pending())->toBe([]);
 });

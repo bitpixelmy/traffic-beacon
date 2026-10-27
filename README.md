@@ -149,6 +149,27 @@ Every exception the site's exception handler reports is also sent to the dashboa
 - **A crash storm costs one call.** The same exception is sent at most once every `TRAFFIC_BEACON_ISSUE_THROTTLE` seconds; the repeats in between are counted and sent with the next report, so the dashboard's occurrence counts stay right.
 - **It never breaks the site.** Reporting can't throw, and if the dashboard is down the reports are dropped.
 
+### Reporting exceptions you handle
+
+An exception the app catches and deals with itself never reaches the exception handler, so it isn't sent. To send it anyway, like `Nightwatch::report()`:
+
+```php
+use Bitpixel\TrafficBeacon\Facades\TrafficBeacon;
+
+try {
+    $gateway->charge($order);
+} catch (PaymentFailed $exception) {
+    TrafficBeacon::report($exception);
+
+    return back()->with('error', 'Your card was declined.');
+}
+```
+
+- It's marked **Handled** on the dashboard, and counted apart from the same exception thrown unhandled.
+- It's sent even when the handler wouldn't report it (a 404, a validation error), and it isn't written to the log. To log it as well, use Laravel's `report($exception)` instead, which the beacon picks up like any other reported exception.
+- It's sent with the same throttle and at the same time as other reports, and does nothing when the beacon is off, crash reporting is off, or the site is running its tests.
+- `TrafficBeacon` is also registered as an alias, so `\TrafficBeacon::report($e)` works without the `use` line.
+
 Set `TRAFFIC_BEACON_CAPTURE_EXCEPTIONS=false` to keep the traffic beacon but stop sending exceptions. Turning the beacon off (`TRAFFIC_BEACON_ENABLED=false`) stops both.
 
 ## Laravel Octane
@@ -173,6 +194,7 @@ Proprietary. This package is only for BitPixel's own sites. The repository is pu
 ## Changelog
 
 ### v0.2.0
+- **Report handled exceptions:** `TrafficBeacon::report($exception)` sends an exception the app caught itself, marked as handled.
 - **Crash reporting:** exceptions the site reports are sent to the dashboard's new Issues tab, with their stack trace and the request's route and URL (without the query string). On by default; turn it off with `TRAFFIC_BEACON_CAPTURE_EXCEPTIONS=false`. Needs a dashboard that has the Issues tab; an older one turns the reports away, which only logs a warning.
 
 ### v0.1.5

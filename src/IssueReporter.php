@@ -31,10 +31,13 @@ use Throwable;
  * user agent are sent; never its headers, cookies, input or session. Stack
  * frames carry file, line and function, never their arguments.
  *
+ * An exception the app catches and handles itself can still be sent with
+ * `TrafficBeacon::report($exception)`; it is marked as handled.
+ *
  * Nothing here ever throws: reporting must never be able to break the site.
  *
  * @phpstan-type Frame array{file: string|null, line: int|null, class: string|null, function: string|null, app: bool}
- * @phpstan-type Report array{class: string, message: string, code: string, file: string, line: int, trace: list<Frame>, snippet: array{file: string, line: int, start: int, lines: list<string>}|null, previous: list<array{class: string, message: string, file: string, line: int}>, context: array<string, mixed>, environment: array<string, string|null>, occurrences: int, timestamp: int}
+ * @phpstan-type Report array{class: string, message: string, code: string, file: string, line: int, trace: list<Frame>, snippet: array{file: string, line: int, start: int, lines: list<string>}|null, previous: list<array{class: string, message: string, file: string, line: int}>, handled: bool, context: array<string, mixed>, environment: array<string, string|null>, occurrences: int, timestamp: int}
  */
 class IssueReporter
 {
@@ -59,6 +62,9 @@ class IssueReporter
 
     private bool $capturing = false;
 
+    /** Set once the flush hooks are in place, so manual reports are sent too. */
+    private bool $listening = false;
+
     /**
      * @param  array<string, mixed>  $config
      */
@@ -75,10 +81,32 @@ class IssueReporter
     }
 
     /**
+     * Called by the service provider once reports are flushed after each request,
+     * command and queued job. Until then (in the site's own tests, or with the
+     * beacon turned off) manual reports are dropped.
+     */
+    public function listen(): void
+    {
+        $this->listening = true;
+    }
+
+    /**
+     * Report an exception the app caught and handled itself, like
+     * `Nightwatch::report()`. Sent even when the exception handler wouldn't report
+     * it, and marked as handled on the dashboard. It isn't logged.
+     */
+    public function report(Throwable $exception): void
+    {
+        if ($this->listening) {
+            $this->capture($exception, handled: true);
+        }
+    }
+
+    /**
      * Hold a report of the exception until the next flush. A fatal error (out of
      * memory, time limit) is sent straight away, since the app is shutting down.
      */
-    public function capture(Throwable $exception): void
+    public function capture(Throwable $exception, bool $handled = false): void
     {
         // An exception thrown while building a report must not be reported again.
         if ($this->capturing || ! $this->enabled()) {
@@ -88,7 +116,7 @@ class IssueReporter
         $this->capturing = true;
 
         try {
-            $this->hold($exception);
+            $this->hold($exception, $handled);
 
             if ($exception instanceof FatalError) {
                 $this->flush();
@@ -100,10 +128,10 @@ class IssueReporter
         }
     }
 
-    private function hold(Throwable $exception): void
+    private function hold(Throwable $exception, bool $handled): void
     {
         $file = $this->relativePath($exception->getFile());
-        $key = sha1(get_class($exception).'|'.$file.':'.$exception->getLine());
+        $key = sha1(get_class($exception).'|'.$file.':'.$exception->getLine().($handled ? '|handled' : ''));
 
         if (isset($this->pending[$key])) {
             $this->pending[$key]['occurrences']++;
@@ -127,7 +155,7 @@ class IssueReporter
 
         $held = $throttle > 0 ? (int) $this->store()->pull(self::HELD_KEY.$key, 0) : 0;
 
-        $this->pending[$key] = $this->report($exception, $file) + ['occurrences' => 1 + $held, 'timestamp' => time()];
+        $this->pending[$key] = $this->build($exception, $file) + ['handled' => $handled, 'occurrences' => 1 + $held, 'timestamp' => time()];
     }
 
     /**
@@ -194,7 +222,7 @@ class IssueReporter
     /**
      * @return array{class: string, message: string, code: string, file: string, line: int, trace: list<Frame>, snippet: array{file: string, line: int, start: int, lines: list<string>}|null, previous: list<array{class: string, message: string, file: string, line: int}>, context: array<string, mixed>, environment: array<string, string|null>}
      */
-    private function report(Throwable $exception, string $file): array
+    private function build(Throwable $exception, string $file): array
     {
         $previous = [];
 
