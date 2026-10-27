@@ -40,7 +40,7 @@ composer config repositories.traffic-beacon vcs https://github.com/bitpixelmy/tr
 ### 2. Install the package
 
 ```bash
-composer require bitpixel/traffic-beacon:^0.2
+composer require bitpixel/traffic-beacon:^0.1.6
 ```
 
 The repository is public, so no GitHub token or Composer authentication is needed.
@@ -193,7 +193,7 @@ Proprietary. This package is only for BitPixel's own sites. The repository is pu
 
 ## Changelog
 
-### v0.2.0
+### v0.1.6
 - **Report handled exceptions:** `TrafficBeacon::report($exception)` sends an exception the app caught itself, marked as handled.
 - **Crash reporting:** exceptions the site reports are sent to the dashboard's new Issues tab, with their stack trace and the request's route and URL (without the query string). On by default; turn it off with `TRAFFIC_BEACON_CAPTURE_EXCEPTIONS=false`. Needs a dashboard that has the Issues tab; an older one turns the reports away, which only logs a warning.
 
