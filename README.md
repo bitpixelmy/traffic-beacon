@@ -165,7 +165,7 @@ try {
 }
 ```
 
-- It's marked **Handled** on the dashboard, and counted apart from the same exception thrown unhandled.
+- It joins the same issue as that exception thrown unhandled, with the occurrence marked **Handled**.
 - It's sent even when the handler wouldn't report it (a 404, a validation error), and it isn't written to the log. To log it as well, use Laravel's `report($exception)` instead, which the beacon picks up like any other reported exception.
 - It's sent with the same throttle and at the same time as other reports, and does nothing when the beacon is off, crash reporting is off, or the site is running its tests.
 - `TrafficBeacon` is also registered as an alias, so `\TrafficBeacon::report($e)` works without the `use` line.
