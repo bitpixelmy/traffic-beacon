@@ -81,6 +81,21 @@ return [
     'ip_header' => env('TRAFFIC_BEACON_IP_HEADER'),
 
     /*
+    | Signed-in users. Off unless the site turns it on with
+    | TRAFFIC_BEACON_TRACK_USERS=true: then each request made by a signed-in user
+    | also names them (the guard, their ID, and their name, email and username
+    | where the user model has them), so the dashboard can show which pages
+    | each user visited. Every guard in config/auth.php is checked, in order;
+    | list only some of them with TRAFFIC_BEACON_USER_GUARDS=web,admin. This is
+    | personal data, so mention it in the site's privacy policy.
+    */
+
+    'users' => [
+        'enabled' => filter_var(env('TRAFFIC_BEACON_TRACK_USERS', false), FILTER_VALIDATE_BOOLEAN),
+        'guards' => array_values(array_filter(array_map('trim', explode(',', (string) env('TRAFFIC_BEACON_USER_GUARDS', ''))))),
+    ],
+
+    /*
     | Where beacons wait between flushes. When this cache store is Redis
     | (6.2+), the buffer is a Redis list. Otherwise beacons are appended to a
     | spool file in `spool_path` on the local disk. Both cost O(1) per request,

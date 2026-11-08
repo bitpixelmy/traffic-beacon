@@ -2,7 +2,9 @@
 
 use Bitpixel\TrafficBeacon\BeaconBuffer;
 use Bitpixel\TrafficBeacon\Middleware\RecordTrafficBeacon;
+use Illuminate\Auth\GenericUser;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -85,4 +87,29 @@ it('does not forward Cloudflare location for other IP headers', function () {
 
 it('reports an unmatched request without its URL', function () {
     expect(recordBeacon()['path'])->toBe('unmatched');
+});
+
+it('does not report the signed-in user unless user tracking is on', function () {
+    Auth::guard('web')->setUser(new GenericUser(['id' => 7, 'name' => 'Aisyah Rahman']));
+
+    expect(recordBeacon())->not->toHaveKey('user');
+});
+
+it('reports the user signed in on any guard in auth.php when user tracking is on', function () {
+    config(['auth.guards.admin' => ['driver' => 'session', 'provider' => 'users']]);
+    Auth::guard('admin')->setUser(new GenericUser(['id' => 42, 'name' => 'Aisyah Rahman', 'email' => 'aisyah@example.com', 'username' => 'aisyah', 'password' => 'secret']));
+
+    expect(recordBeacon(config: ['users' => ['enabled' => true, 'guards' => []]])['user'])
+        ->toBe(['guard' => 'admin', 'id' => '42', 'name' => 'Aisyah Rahman', 'email' => 'aisyah@example.com', 'username' => 'aisyah']);
+});
+
+it('only checks the listed guards, and reports no user for a guest', function () {
+    config(['auth.guards.admin' => ['driver' => 'session', 'provider' => 'users']]);
+    Auth::guard('admin')->setUser(new GenericUser(['id' => 42]));
+
+    expect(recordBeacon(config: ['users' => ['enabled' => true, 'guards' => ['web']]]))->not->toHaveKey('user');
+});
+
+it('turns user tracking on from TRAFFIC_BEACON_TRACK_USERS, off by default', function () {
+    expect(config('traffic-beacon.users'))->toBe(['enabled' => false, 'guards' => []]);
 });

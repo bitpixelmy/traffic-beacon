@@ -88,6 +88,8 @@ TRAFFIC_BEACON_ISSUE_THROTTLE=10
 | `TRAFFIC_BEACON_SAMPLE_RATE` | `1.0` | Fraction of requests to record. |
 | `TRAFFIC_BEACON_IGNORE_BOTS` | `true` | Skip bots and requests without a user agent. |
 | `TRAFFIC_BEACON_IP_HEADER` | — | Header with the real visitor IP, e.g. `CF-Connecting-IP`. |
+| `TRAFFIC_BEACON_TRACK_USERS` | `false` | Also report the signed-in user (guard, ID, name, email, username). |
+| `TRAFFIC_BEACON_USER_GUARDS` | every guard | Comma-separated guards to check, e.g. `web,admin`. |
 | `TRAFFIC_BEACON_CACHE_STORE` | default store | The store checked for Redis. |
 | `TRAFFIC_BEACON_SPOOL_PATH` | `storage/framework/cache/traffic-beacon` | Where the spool file lives when Redis isn't used. |
 | `TRAFFIC_BEACON_CAPTURE_EXCEPTIONS` | `true` | Send the site's exceptions to the Issues tab. |
@@ -129,6 +131,21 @@ The beacon uses `$request->ip()`, which is only the visitor's IP when Laravel tr
 - **Load balancer or another proxy:** trust it with `trustProxies(at: '…')`, or set `TRAFFIC_BEACON_IP_HEADER=X-Forwarded-For`. The first address in the header is used.
 
 > Only set `TRAFFIC_BEACON_IP_HEADER` when **every** request reaches the site through that proxy. Otherwise visitors can send the header themselves and fake their location.
+
+## Signed-in users
+
+Off by default. Turn it on to see which pages each signed-in user visited (Traffic → Users on the dashboard, admins only):
+
+```dotenv
+TRAFFIC_BEACON_TRACK_USERS=true
+```
+
+Each request made by a signed-in user then also names them: the guard, their ID, and their `name`, `email` and `username` where the user model has those attributes. Guests send nothing extra.
+
+- **Every guard** in `config/auth.php` is checked, in order, and the first with a signed-in user is used. To check only some, list them: `TRAFFIC_BEACON_USER_GUARDS=web,admin`.
+- **Session guards** read the login from the session after the response has gone, so pages that never check auth are covered too. **Token guards** (API tokens, Sanctum) are only used when the request already authenticated with them.
+- Paths are still route patterns (`/orders/{order}`), never the concrete URL.
+- This is personal data. Mention it in the site's privacy policy. The dashboard keeps user visits for 30 days by default.
 
 ## What isn't recorded
 
@@ -192,6 +209,10 @@ The Redis tests run when a Redis server is reachable on `127.0.0.1:6379` (or `RE
 Proprietary. This package is only for BitPixel's own sites. The repository is public so sites can install it without a GitHub token, but that doesn't grant a licence to use it anywhere else. See [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.1.7
+- **Signed-in users (opt-in):** with `TRAFFIC_BEACON_TRACK_USERS=true`, requests by a signed-in user on any guard in `config/auth.php` also report the guard, the user's ID, name, email and username, for the dashboard's Traffic → Users. `TRAFFIC_BEACON_USER_GUARDS` limits the guards checked.
+- **Upgrading:** sites that published `config/traffic-beacon.php` should add the new `users` key, or republish it. Dashboards older than this release ignore the user and keep accepting batches.
 
 ### v0.1.6
 - **Report handled exceptions:** `TrafficBeacon::report($exception)` sends an exception the app caught itself, marked as handled.

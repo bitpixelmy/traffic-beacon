@@ -4,7 +4,9 @@ namespace Bitpixel\TrafficBeacon\Middleware;
 
 use Bitpixel\TrafficBeacon\BeaconBuffer;
 use Closure;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
@@ -17,6 +19,9 @@ use Throwable;
  * The path is reported as the matched route pattern (e.g. `posts/{post}`), never
  * the concrete URL, so no IDs or query strings leave the site. Cloudflare's
  * visitor location headers are forwarded when the zone has them enabled.
+ *
+ * When the site turns on user tracking, a request made by a signed-in user (on any
+ * of its guards) also names that user, so the dashboard can follow their visits.
  *
  * Recording runs after the response has been sent and never throws, so the
  * beacon cannot slow down or break the site. Bots, uptime monitors and
@@ -79,6 +84,10 @@ class RecordTrafficBeacon
 
         if ($geo = $this->cloudflareLocation($request)) {
             $beacon['geo'] = $geo;
+        }
+
+        if ($user = $this->signedInUser()) {
+            $beacon['user'] = $user;
         }
 
         $this->buffer->push($beacon);
@@ -153,6 +162,54 @@ class RecordTrafficBeacon
         $uri = $request->route()?->uri();
 
         return $uri === null ? 'unmatched' : Str::limit('/'.ltrim($uri, '/'), 250, '');
+    }
+
+    /**
+     * The user signed in on the first guard that has one, when user tracking is on:
+     * the guard, their ID, and their name, email and username where the user has them.
+     * A guard that has already loaded its user is used as is; a session guard reads the
+     * login from the session (one query, after the response has gone). Token guards are
+     * only used when the request already authenticated with them, so recording never
+     * looks up a token itself.
+     *
+     * @return array<string, string>|null
+     */
+    private function signedInUser(): ?array
+    {
+        if (! ($this->config['users']['enabled'] ?? false)) {
+            return null;
+        }
+
+        $guards = ($this->config['users']['guards'] ?? []) ?: array_keys((array) config('auth.guards', []));
+
+        foreach ($guards as $name) {
+            try {
+                $guard = Auth::guard($name);
+                $loaded = method_exists($guard, 'hasUser') && $guard->hasUser();
+                $user = $loaded || config("auth.guards.{$name}.driver") === 'session' ? $guard->user() : null;
+            } catch (Throwable) {
+                continue;
+            }
+
+            if ($user instanceof Authenticatable && is_scalar($id = $user->getAuthIdentifier())) {
+                return array_filter([
+                    'guard' => Str::limit((string) $name, 50, ''),
+                    'id' => Str::limit((string) $id, 100, ''),
+                    'name' => $this->userAttribute($user, 'name'),
+                    'email' => $this->userAttribute($user, 'email'),
+                    'username' => $this->userAttribute($user, 'username'),
+                ], fn (?string $value): bool => $value !== null && $value !== '');
+            }
+        }
+
+        return null;
+    }
+
+    private function userAttribute(Authenticatable $user, string $attribute): ?string
+    {
+        $value = $user->{$attribute} ?? null;
+
+        return is_scalar($value) ? Str::limit((string) $value, 255, '') : null;
     }
 
     /**
