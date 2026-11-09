@@ -3,7 +3,7 @@
 Reports anonymised request beacons from a Laravel site to the BitPixel Deployment Monitor, so its visitors show up live on the dashboard's globe. It also reports the site's crashes (exceptions) to the dashboard's **Issues** tab.
 
 - **Global middleware**: it registers itself, so no code changes are needed.
-- **Reports the matched route pattern** (e.g. `/posts/{post}`), the status, the duration and the visitor IP. It never sends the concrete URL, query strings or IDs. The dashboard uses the IP to look up a city and shows it in its incoming feed; it keeps each request for 2 days, then deletes it.
+- **Reports the matched route pattern** (e.g. `/posts/{post}`), the status, the duration and the visitor IP. It never sends the concrete URL, query strings or IDs, except the actual path of a signed-in user's request when user tracking is on. The dashboard uses the IP to look up a city and shows it in its incoming feed; it keeps each request for 2 days, then deletes it.
 - **Runs after the response is sent** and never throws, so it can't slow down or break the site.
 - **Batches beacons** and sends them at most every 5 seconds.
 - **Reports exceptions** the site's exception handler reports, with their stack trace, to the Issues tab. See [Crash reporting](#crash-reporting).
@@ -140,11 +140,11 @@ Off by default. Turn it on to see which pages each signed-in user visited (Traff
 TRAFFIC_BEACON_TRACK_USERS=true
 ```
 
-Each request made by a signed-in user then also names them: the guard, their ID, and their `name`, `email` and `username` where the user model has those attributes. Guests send nothing extra.
+Each request made by a signed-in user then also names them: the guard, their ID, and their `name`, `email` and `username` where the user model has those attributes, plus the actual path they opened (`/orders/1042`). Guests send nothing extra.
 
 - **Every guard** in `config/auth.php` is checked, in order, and the first with a signed-in user is used. To check only some, list them: `TRAFFIC_BEACON_USER_GUARDS=web,admin`.
 - **Session guards** read the login from the session after the response has gone, so pages that never check auth are covered too. **Token guards** (API tokens, Sanctum) are only used when the request already authenticated with them.
-- Paths are still route patterns (`/orders/{order}`), never the concrete URL.
+- Signed-in users' requests carry both the route pattern (`/orders/{order}`) and the actual path (`/orders/1042`), never the query string. Guests' requests only carry the route pattern.
 - This is personal data. Mention it in the site's privacy policy. The dashboard keeps user visits for 30 days by default.
 
 ## What isn't recorded
@@ -209,6 +209,9 @@ The Redis tests run when a Redis server is reachable on `127.0.0.1:6379` (or `RE
 Proprietary. This package is only for BitPixel's own sites. The repository is public so sites can install it without a GitHub token, but that doesn't grant a licence to use it anywhere else. See [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.1.8
+- **Actual paths for signed-in users:** with user tracking on, a signed-in user's request also reports the path they actually opened (`/orders/1042`, without the query string), so Traffic → Users shows which record they looked at. Guests' requests still only report the route pattern. Dashboards older than this release ignore it.
 
 ### v0.1.7
 - **Signed-in users (opt-in):** with `TRAFFIC_BEACON_TRACK_USERS=true`, requests by a signed-in user on any guard in `config/auth.php` also report the guard, the user's ID, name, email and username, for the dashboard's Traffic → Users. `TRAFFIC_BEACON_USER_GUARDS` limits the guards checked.

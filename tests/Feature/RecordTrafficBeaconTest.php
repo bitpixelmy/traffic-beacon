@@ -92,22 +92,23 @@ it('reports an unmatched request without its URL', function () {
 it('does not report the signed-in user unless user tracking is on', function () {
     Auth::guard('web')->setUser(new GenericUser(['id' => 7, 'name' => 'Aisyah Rahman']));
 
-    expect(recordBeacon())->not->toHaveKey('user');
+    expect(recordBeacon())->not->toHaveKeys(['user', 'url']);
 });
 
 it('reports the user signed in on any guard in auth.php when user tracking is on', function () {
     config(['auth.guards.admin' => ['driver' => 'session', 'provider' => 'users']]);
     Auth::guard('admin')->setUser(new GenericUser(['id' => 42, 'name' => 'Aisyah Rahman', 'email' => 'aisyah@example.com', 'username' => 'aisyah', 'password' => 'secret']));
 
-    expect(recordBeacon(config: ['users' => ['enabled' => true, 'guards' => []]])['user'])
-        ->toBe(['guard' => 'admin', 'id' => '42', 'name' => 'Aisyah Rahman', 'email' => 'aisyah@example.com', 'username' => 'aisyah']);
+    expect(recordBeacon(config: ['users' => ['enabled' => true, 'guards' => []]]))
+        ->user->toBe(['guard' => 'admin', 'id' => '42', 'name' => 'Aisyah Rahman', 'email' => 'aisyah@example.com', 'username' => 'aisyah'])
+        ->url->toBe('/posts/42');
 });
 
 it('only checks the listed guards, and reports no user for a guest', function () {
     config(['auth.guards.admin' => ['driver' => 'session', 'provider' => 'users']]);
     Auth::guard('admin')->setUser(new GenericUser(['id' => 42]));
 
-    expect(recordBeacon(config: ['users' => ['enabled' => true, 'guards' => ['web']]]))->not->toHaveKey('user');
+    expect(recordBeacon(config: ['users' => ['enabled' => true, 'guards' => ['web']]]))->not->toHaveKeys(['user', 'url']);
 });
 
 it('turns user tracking on from TRAFFIC_BEACON_TRACK_USERS, off by default', function () {

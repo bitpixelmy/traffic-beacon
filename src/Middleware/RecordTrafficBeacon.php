@@ -21,7 +21,8 @@ use Throwable;
  * visitor location headers are forwarded when the zone has them enabled.
  *
  * When the site turns on user tracking, a request made by a signed-in user (on any
- * of its guards) also names that user, so the dashboard can follow their visits.
+ * of its guards) also names that user and the actual path they opened (e.g.
+ * `posts/42`, still without the query string), so the dashboard can follow their visits.
  *
  * Recording runs after the response has been sent and never throws, so the
  * beacon cannot slow down or break the site. Bots, uptime monitors and
@@ -88,6 +89,7 @@ class RecordTrafficBeacon
 
         if ($user = $this->signedInUser()) {
             $beacon['user'] = $user;
+            $beacon['url'] = $this->visitedUrl($request);
         }
 
         $this->buffer->push($beacon);
@@ -162,6 +164,14 @@ class RecordTrafficBeacon
         $uri = $request->route()?->uri();
 
         return $uri === null ? 'unmatched' : Str::limit('/'.ltrim($uri, '/'), 250, '');
+    }
+
+    /**
+     * The path the signed-in user actually opened, IDs included but never the query string.
+     */
+    private function visitedUrl(Request $request): string
+    {
+        return Str::limit('/'.ltrim($request->decodedPath(), '/'), 500, '');
     }
 
     /**

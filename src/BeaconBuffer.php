@@ -26,7 +26,7 @@ use Throwable;
  *
  * Nothing here ever throws: the beacon must never be able to break the site.
  *
- * @phpstan-type Beacon array{method: string, status: int, path: string, duration_ms: int, ip: string|null, timestamp: int, geo?: array<string, float|string>}
+ * @phpstan-type Beacon array{method: string, status: int, path: string, duration_ms: int, ip: string|null, timestamp: int, geo?: array<string, float|string>, user?: array<string, string>, url?: string}
  */
 class BeaconBuffer
 {
