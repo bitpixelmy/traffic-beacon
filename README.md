@@ -3,7 +3,7 @@
 Reports anonymised request beacons from a Laravel site to the BitPixel Deployment Monitor, so its visitors show up live on the dashboard's globe. It also reports the site's crashes (exceptions) to the dashboard's **Issues** tab.
 
 - **Global middleware**: it registers itself, so no code changes are needed.
-- **Reports the matched route pattern** (e.g. `/posts/{post}`), the status, the duration and the visitor IP. It never sends the concrete URL, query strings or IDs, except the actual path of a signed-in user's request when user tracking is on. The dashboard uses the IP to look up a city and shows it in its incoming feed; it keeps each request for 2 days, then deletes it.
+- **Reports the matched route pattern** (e.g. `/posts/{post}`), the status, the duration and the visitor IP. It never sends query strings, and only sends the concrete URL (with its IDs) when the site turns on real URLs, or for a signed-in user's request when user tracking is on. The dashboard uses the IP to look up a city and shows it in its incoming feed; it keeps each request for 2 days, then deletes it.
 - **Runs after the response is sent** and never throws, so it can't slow down or break the site.
 - **Batches beacons** and sends them at most every 5 seconds.
 - **Reports exceptions** the site's exception handler reports, with their stack trace, to the Issues tab. See [Crash reporting](#crash-reporting).
@@ -88,6 +88,7 @@ TRAFFIC_BEACON_ISSUE_THROTTLE=10
 | `TRAFFIC_BEACON_SAMPLE_RATE` | `1.0` | Fraction of requests to record. |
 | `TRAFFIC_BEACON_IGNORE_BOTS` | `true` | Skip bots and requests without a user agent. |
 | `TRAFFIC_BEACON_IP_HEADER` | — | Header with the real visitor IP, e.g. `CF-Connecting-IP`. |
+| `TRAFFIC_BEACON_REAL_URLS` | `false` | Also report the path actually opened (`/posts/42`, no query string) for every request. |
 | `TRAFFIC_BEACON_TRACK_USERS` | `false` | Also report the signed-in user (guard, ID, name, email, username). |
 | `TRAFFIC_BEACON_USER_GUARDS` | every guard | Comma-separated guards to check, e.g. `web,admin`. |
 | `TRAFFIC_BEACON_CACHE_STORE` | default store | The store checked for Redis. |
@@ -144,7 +145,7 @@ Each request made by a signed-in user then also names them: the guard, their ID,
 
 - **Every guard** in `config/auth.php` is checked, in order, and the first with a signed-in user is used. To check only some, list them: `TRAFFIC_BEACON_USER_GUARDS=web,admin`.
 - **Session guards** read the login from the session after the response has gone, so pages that never check auth are covered too. **Token guards** (API tokens, Sanctum) are only used when the request already authenticated with them.
-- Signed-in users' requests carry both the route pattern (`/orders/{order}`) and the actual path (`/orders/1042`), never the query string. Guests' requests only carry the route pattern.
+- Signed-in users' requests carry both the route pattern (`/orders/{order}`) and the actual path (`/orders/1042`), never the query string. Guests' requests only carry the route pattern, unless `TRAFFIC_BEACON_REAL_URLS=true`. Route parameters that look secret (`{token}`, `{hash}`, `{signature}`, …) always stay placeholders, so password-reset and verification links never leave the site, and requests that matched no route send no real path.
 - This is personal data. Mention it in the site's privacy policy. The dashboard keeps user visits for 30 days by default.
 
 ## What isn't recorded
@@ -209,6 +210,11 @@ The Redis tests run when a Redis server is reachable on `127.0.0.1:6379` (or `RE
 Proprietary. This package is only for BitPixel's own sites. The repository is public so sites can install it without a GitHub token, but that doesn't grant a licence to use it anywhere else. See [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.1.9
+- **Real URLs (opt-in):** with `TRAFFIC_BEACON_REAL_URLS=true`, every request also reports the path actually opened (`/posts/42`, never the query string) next to its route pattern, for the dashboard's recent requests list. Off by default. Dashboards older than this release ignore it.
+- **Secrets stay out:** real paths are built from the matched route, so parameters that look secret (`{token}`, `{hash}`, `{signature}`, `{code}`, `{key}`, `{password}`) stay placeholders, and requests that matched no route send no real path. This also applies to signed-in users' requests.
+- **Upgrading:** sites that published `config/traffic-beacon.php` should add the new `real_urls` key, or republish it.
 
 ### v0.1.8
 - **Actual paths for signed-in users:** with user tracking on, a signed-in user's request also reports the path they actually opened (`/orders/1042`, without the query string), so Traffic → Users shows which record they looked at. Guests' requests still only report the route pattern. Dashboards older than this release ignore it.

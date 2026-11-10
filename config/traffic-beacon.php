@@ -72,6 +72,15 @@ return [
     'ignore_bots' => (bool) env('TRAFFIC_BEACON_IGNORE_BOTS', true),
 
     /*
+    | Real URLs. Paths are reported as route patterns (`/posts/{post}`) so no
+    | IDs leave the site. With TRAFFIC_BEACON_REAL_URLS=true every request also
+    | reports the path actually opened (`/posts/42`), never the query string.
+    | Requests by a signed-in user always do when user tracking is on.
+    */
+
+    'real_urls' => filter_var(env('TRAFFIC_BEACON_REAL_URLS', false), FILTER_VALIDATE_BOOLEAN),
+
+    /*
     | Header holding the real visitor IP when the site sits behind a proxy
     | that Laravel doesn't trust, e.g. "CF-Connecting-IP" behind Cloudflare.
     | Leave empty to use $request->ip(). Only set it when every request comes

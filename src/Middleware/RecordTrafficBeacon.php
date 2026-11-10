@@ -6,6 +6,7 @@ use Bitpixel\TrafficBeacon\BeaconBuffer;
 use Closure;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -16,8 +17,9 @@ use Throwable;
  * Records a beacon for every request once the response has been sent
  * (terminable middleware), then flushes the shared buffer if it is due.
  *
- * The path is reported as the matched route pattern (e.g. `posts/{post}`), never
- * the concrete URL, so no IDs or query strings leave the site. Cloudflare's
+ * The path is reported as the matched route pattern (e.g. `posts/{post}`), so no
+ * IDs or query strings leave the site, unless the site turns on real URLs: then the
+ * path actually opened (`posts/42`) is sent too, still without the query string. Cloudflare's
  * visitor location headers are forwarded when the zone has them enabled.
  *
  * When the site turns on user tracking, a request made by a signed-in user (on any
@@ -36,6 +38,11 @@ class RecordTrafficBeacon
      * so one odd request can never get a whole batch rejected.
      */
     private const array METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+
+    /**
+     * Route parameters whose values are never sent, even with real URLs on.
+     */
+    private const string SECRET_PARAMETER = '/token|password|secret|signature|hash|code|key/i';
 
     /**
      * User agents of crawlers, link previewers, uptime monitors and HTTP libraries.
@@ -89,7 +96,10 @@ class RecordTrafficBeacon
 
         if ($user = $this->signedInUser()) {
             $beacon['user'] = $user;
-            $beacon['url'] = $this->visitedUrl($request);
+        }
+
+        if ((isset($beacon['user']) || ($this->config['real_urls'] ?? false)) && ($url = $this->visitedUrl($request)) !== null) {
+            $beacon['url'] = $url;
         }
 
         $this->buffer->push($beacon);
@@ -167,11 +177,31 @@ class RecordTrafficBeacon
     }
 
     /**
-     * The path the signed-in user actually opened, IDs included but never the query string.
+     * The path actually opened: the route pattern with each parameter filled in (IDs
+     * included, never the query string). Parameters that look secret, such as a
+     * password-reset `{token}` or an email-verification `{hash}`, stay placeholders.
+     * Requests that matched no route (scanners probing for files) have none.
      */
-    private function visitedUrl(Request $request): string
+    private function visitedUrl(Request $request): ?string
     {
-        return Str::limit('/'.ltrim($request->decodedPath(), '/'), 500, '');
+        $route = $request->route();
+
+        // No route, or one never bound to the request, has no parameter values to fill in.
+        if (! $route instanceof Route || (str_contains($route->uri(), '{') && ! $route->hasParameters())) {
+            return null;
+        }
+
+        $path = preg_replace_callback('/\{(\w+)\??\}/', function (array $match) use ($route): string {
+            $value = $route->originalParameter($match[1]);
+
+            return match (true) {
+                $value === null || $value === '' => '',
+                preg_match(self::SECRET_PARAMETER, $match[1]) === 1 => '{'.$match[1].'}',
+                default => (string) $value,
+            };
+        }, $route->uri());
+
+        return Str::limit('/'.trim((string) preg_replace('#/{2,}#', '/', (string) $path), '/'), 500, '');
     }
 
     /**

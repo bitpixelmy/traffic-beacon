@@ -4,6 +4,7 @@ use Bitpixel\TrafficBeacon\BeaconBuffer;
 use Bitpixel\TrafficBeacon\Middleware\RecordTrafficBeacon;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Symfony\Component\HttpFoundation\Response;
@@ -16,7 +17,7 @@ use Symfony\Component\HttpFoundation\Response;
  * @param  array<string, mixed>  $config
  * @return array<string, mixed>|null
  */
-function recordBeacon(array $headers = [], array $config = [], string $remoteAddr = '198.51.100.1'): ?array
+function recordBeacon(array $headers = [], array $config = [], string $remoteAddr = '198.51.100.1', string $uri = '/posts/42', ?string $route = null): ?array
 {
     $config = array_merge(config('traffic-beacon'), $config);
     $middleware = new RecordTrafficBeacon(new BeaconBuffer($config), $config);
@@ -27,7 +28,12 @@ function recordBeacon(array $headers = [], array $config = [], string $remoteAdd
         $server['HTTP_'.strtoupper(str_replace('-', '_', $name))] = $value;
     }
 
-    $request = Request::create('/posts/42', 'GET', server: $server);
+    $request = Request::create($uri, 'GET', server: $server);
+
+    if ($route !== null) {
+        $matched = (new Route(['GET'], $route, fn () => null))->bind($request);
+        $request->setRouteResolver(fn () => $matched);
+    }
     $response = $middleware->handle($request, fn () => new Response('ok'));
     $middleware->terminate($request, $response);
 
@@ -99,7 +105,7 @@ it('reports the user signed in on any guard in auth.php when user tracking is on
     config(['auth.guards.admin' => ['driver' => 'session', 'provider' => 'users']]);
     Auth::guard('admin')->setUser(new GenericUser(['id' => 42, 'name' => 'Aisyah Rahman', 'email' => 'aisyah@example.com', 'username' => 'aisyah', 'password' => 'secret']));
 
-    expect(recordBeacon(config: ['users' => ['enabled' => true, 'guards' => []]]))
+    expect(recordBeacon(config: ['users' => ['enabled' => true, 'guards' => []]], route: 'posts/{post}'))
         ->user->toBe(['guard' => 'admin', 'id' => '42', 'name' => 'Aisyah Rahman', 'email' => 'aisyah@example.com', 'username' => 'aisyah'])
         ->url->toBe('/posts/42');
 });
@@ -114,3 +120,22 @@ it('only checks the listed guards, and reports no user for a guest', function ()
 it('turns user tracking on from TRAFFIC_BEACON_TRACK_USERS, off by default', function () {
     expect(config('traffic-beacon.users'))->toBe(['enabled' => false, 'guards' => []]);
 });
+
+it('reports the real path of every request, without the query string, only when real URLs are on', function () {
+    expect(config('traffic-beacon.real_urls'))->toBeFalse()
+        ->and(recordBeacon(config: ['real_urls' => true], uri: '/posts/42?token=secret', route: 'posts/{post}'))
+        ->path->toBe('/posts/{post}')
+        ->url->toBe('/posts/42')
+        ->not->toHaveKey('user');
+});
+
+it('keeps secret route parameters as placeholders, and sends no real path for unmatched requests', function (string $uri, ?string $route, ?string $url) {
+    $beacon = recordBeacon(config: ['real_urls' => true], uri: $uri, route: $route);
+
+    expect($beacon['url'] ?? null)->toBe($url);
+})->with([
+    'password reset' => ['/reset-password/abc123', 'reset-password/{token}', '/reset-password/{token}'],
+    'email verification' => ['/email/verify/7/f00d', 'email/verify/{id}/{hash}', '/email/verify/7/{hash}'],
+    'optional parameter left out' => ['/docs', 'docs/{page?}', '/docs'],
+    'no route matched' => ['/wp-login.php', null, null],
+]);
