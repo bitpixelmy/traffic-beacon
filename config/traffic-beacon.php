@@ -141,4 +141,34 @@ return [
 
     'issue_throttle' => (int) env('TRAFFIC_BEACON_ISSUE_THROTTLE', 10),
 
+    /*
+    | Queued jobs. Each queue worker counts the jobs it runs, per job class, queue
+    | and minute (how many finished, failed or were retried, how long they took
+    | and waited), and sends the counts every `flush_interval` seconds for the
+    | dashboard's Jobs tab: TRAFFIC_BEACON_TRACK_JOBS=true|false. Only the job's
+    | class and timings are sent, never its payload. Jobs on the sync connection
+    | aren't counted.
+    */
+
+    'track_jobs' => filter_var(env('TRAFFIC_BEACON_TRACK_JOBS', true), FILTER_VALIDATE_BOOLEAN),
+
+    /*
+    | Scheduled tasks. The scheduler reports the tasks in its schedule (name, cron
+    | expression, timezone) and how each run went (when, how long, exit code, and
+    | the failing exception's class and message), so the dashboard can alert on a
+    | failed or missed task, or a scheduler that stopped:
+    | TRAFFIC_BEACON_TRACK_SCHEDULE=true|false. Never the task's output.
+    */
+
+    'track_schedule' => filter_var(env('TRAFFIC_BEACON_TRACK_SCHEDULE', true), FILTER_VALIDATE_BOOLEAN),
+
+    /*
+    | Where job counts and the scheduler's reports are sent. Leave empty to use
+    | the traffic endpoint with "/jobs" or "/schedule" added.
+    */
+
+    'jobs_endpoint' => env('TRAFFIC_BEACON_JOBS_ENDPOINT'),
+
+    'schedule_endpoint' => env('TRAFFIC_BEACON_SCHEDULE_ENDPOINT'),
+
 ];

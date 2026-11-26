@@ -40,7 +40,7 @@ composer config repositories.traffic-beacon vcs https://github.com/bitpixelmy/tr
 ### 2. Install the package
 
 ```bash
-composer require bitpixel/traffic-beacon:^0.1.6
+composer require bitpixel/traffic-beacon:^0.2.0
 ```
 
 The repository is public, so no GitHub token or Composer authentication is needed.
@@ -96,6 +96,10 @@ TRAFFIC_BEACON_ISSUE_THROTTLE=10
 | `TRAFFIC_BEACON_CAPTURE_EXCEPTIONS` | `true` | Send the site's exceptions to the Issues tab. |
 | `TRAFFIC_BEACON_ISSUES_ENDPOINT` | endpoint + `/issues` | Where exceptions are sent. |
 | `TRAFFIC_BEACON_ISSUE_THROTTLE` | `10` | Seconds between reports of the same exception. `0` sends every one. |
+| `TRAFFIC_BEACON_TRACK_JOBS` | `true` | Count the queued jobs the workers run, for the Jobs tab. |
+| `TRAFFIC_BEACON_TRACK_SCHEDULE` | `true` | Report the scheduler's tasks and runs, for the Jobs tab. |
+| `TRAFFIC_BEACON_JOBS_ENDPOINT` | endpoint + `/jobs` | Where job counts are sent. |
+| `TRAFFIC_BEACON_SCHEDULE_ENDPOINT` | endpoint + `/schedule` | Where the scheduler's reports are sent. |
 
 ### Scheduled flush (optional)
 
@@ -190,6 +194,15 @@ try {
 
 Set `TRAFFIC_BEACON_CAPTURE_EXCEPTIONS=false` to keep the traffic beacon but stop sending exceptions. Turning the beacon off (`TRAFFIC_BEACON_ENABLED=false`) stops both.
 
+## Jobs and scheduled tasks
+
+From v0.2.0 the beacon also reports the work the site does in the background, for the dashboard's **Jobs** tab. Both are on by default and use the same endpoint and token.
+
+- **Queued jobs:** each queue worker counts the jobs it runs, per job class, queue and minute: how many finished, failed for good, or failed and were released to try again, their total and longest duration, and how long they waited in the queue. Counts are sent between jobs, at most once per `TRAFFIC_BEACON_FLUSH_INTERVAL` seconds, and when the worker stops. Only the job's class and timings are sent, never its payload. Jobs on the `sync` connection aren't counted.
+- **Scheduled tasks:** when a task starts and when `schedule:run` ends, the scheduler sends the tasks in its schedule that run in this environment (name, cron expression, timezone) and how each run went (start, duration, exit code, and a failing exception's class and message). A task run in the background reports its exit code from `schedule:finish`. Tasks repeating within the minute are reported once per minute, with a count. Task output is never sent.
+- **What the dashboard does with it:** it alerts when jobs keep failing, a task fails, a task hasn't started when it should have, or the scheduler stops reporting.
+- **Upgrading:** restart the queue workers (`php artisan queue:restart`) so they load the new code. Sites that published `config/traffic-beacon.php` should add the `track_jobs` and `track_schedule` keys, or republish it.
+
 ## Laravel Octane
 
 The beacon also works under Laravel Octane: request duration is measured per request, not from when the worker started.
@@ -210,6 +223,11 @@ The Redis tests run when a Redis server is reachable on `127.0.0.1:6379` (or `RE
 Proprietary. This package is only for BitPixel's own sites. The repository is public so sites can install it without a GitHub token, but that doesn't grant a licence to use it anywhere else. See [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.2.0
+- **Queued jobs:** queue workers count the jobs they run, per job class, queue and minute (finished, failed, retried, duration and time waiting), and send the counts to the dashboard's Jobs tab. `TRAFFIC_BEACON_TRACK_JOBS=false` turns it off.
+- **Scheduled tasks:** the scheduler reports its tasks and each run (start, duration, exit code, error), so the dashboard can alert on failed or missed tasks and a stopped scheduler. `TRAFFIC_BEACON_TRACK_SCHEDULE=false` turns it off.
+- **Upgrading:** needs a dashboard with the Jobs tab. Restart the queue workers after updating, and add the `track_jobs` and `track_schedule` keys to a published config.
 
 ### v0.1.9
 - **Real URLs (opt-in):** with `TRAFFIC_BEACON_REAL_URLS=true`, every request also reports the path actually opened (`/posts/42`, never the query string) next to its route pattern, for the dashboard's recent requests list. Off by default. Dashboards older than this release ignore it.

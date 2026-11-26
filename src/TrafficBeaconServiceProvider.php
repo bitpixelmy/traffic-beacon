@@ -4,9 +4,19 @@ namespace Bitpixel\TrafficBeacon;
 
 use Bitpixel\TrafficBeacon\Console\FlushBeacons;
 use Bitpixel\TrafficBeacon\Middleware\RecordTrafficBeacon;
+use Illuminate\Console\Events\CommandFinished;
+use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
+use Illuminate\Console\Events\ScheduledTaskFailed;
+use Illuminate\Console\Events\ScheduledTaskFinished;
+use Illuminate\Console\Events\ScheduledTaskSkipped;
+use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Queue\Events\JobExceptionOccurred;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Queue\Events\WorkerStopping;
 use Illuminate\Support\Facades\Event;
@@ -21,6 +31,9 @@ use Throwable;
  * Also hooks into the exception handler, so the exceptions the site reports
  * are sent to the dashboard's Issues tab once the request (or command, or
  * queued job) has finished.
+ *
+ * In the console, it also counts the queued jobs the workers run and reports the
+ * scheduler's tasks and runs, for the dashboard's Jobs tab.
  */
 class TrafficBeaconServiceProvider extends ServiceProvider
 {
@@ -30,6 +43,8 @@ class TrafficBeaconServiceProvider extends ServiceProvider
 
         $this->app->singleton(BeaconBuffer::class, fn ($app) => new BeaconBuffer($app['config']['traffic-beacon']));
         $this->app->singleton(IssueReporter::class, fn ($app) => new IssueReporter($app, $app['config']['traffic-beacon']));
+        $this->app->singleton(JobReporter::class, fn ($app) => new JobReporter($app['config']['traffic-beacon']));
+        $this->app->singleton(ScheduleReporter::class, fn ($app) => new ScheduleReporter($app, $app['config']['traffic-beacon']));
         $this->app->singleton(RecordTrafficBeacon::class, fn ($app) => new RecordTrafficBeacon(
             $app->make(BeaconBuffer::class),
             $app['config']['traffic-beacon'],
@@ -60,6 +75,8 @@ class TrafficBeaconServiceProvider extends ServiceProvider
 
         $this->commands([FlushBeacons::class]);
 
+        $this->trackBackgroundWork();
+
         if (config('traffic-beacon.schedule_flush')) {
             // Runs inside the long-lived `schedule:run` process rather than as an
             // artisan command, which would boot the whole app 12 times a minute.
@@ -70,6 +87,42 @@ class TrafficBeaconServiceProvider extends ServiceProvider
                     ->name('traffic-beacon:flush')
                     ->everyFiveSeconds()
                     ->withoutOverlapping(1);
+            });
+        }
+    }
+
+    /**
+     * Count queued jobs between jobs, and report the scheduler when a task starts and
+     * when `schedule:run` (or, for background tasks, `schedule:finish`) ends.
+     */
+    private function trackBackgroundWork(): void
+    {
+        $jobs = $this->app->make(JobReporter::class);
+
+        if ($jobs->enabled()) {
+            Event::listen(JobProcessing::class, [$jobs, 'starting']);
+            Event::listen(JobProcessed::class, [$jobs, 'processed']);
+            Event::listen(JobExceptionOccurred::class, [$jobs, 'threw']);
+            Event::listen(JobFailed::class, [$jobs, 'failed']);
+            Event::listen(Looping::class, fn () => $jobs->flush());
+            Event::listen(WorkerStopping::class, fn () => $jobs->flush(force: true));
+            $this->app->terminating(fn () => $jobs->flush(force: true));
+        }
+
+        $schedule = $this->app->make(ScheduleReporter::class);
+
+        if ($schedule->enabled()) {
+            Event::listen(ScheduledTaskStarting::class, [$schedule, 'starting']);
+            Event::listen(ScheduledTaskFinished::class, [$schedule, 'finished']);
+            Event::listen(ScheduledTaskFailed::class, [$schedule, 'failed']);
+            Event::listen(ScheduledTaskSkipped::class, [$schedule, 'skipped']);
+            Event::listen(ScheduledBackgroundTaskFinished::class, [$schedule, 'backgroundFinished']);
+            Event::listen(CommandFinished::class, function (CommandFinished $event) use ($schedule): void {
+                match ($event->command) {
+                    'schedule:run' => $schedule->flush(),
+                    'schedule:finish' => $schedule->flush(withSchedule: false),
+                    default => null,
+                };
             });
         }
     }
